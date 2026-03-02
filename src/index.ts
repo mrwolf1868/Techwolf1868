@@ -18,8 +18,8 @@ import chalk from 'chalk';
 import NodeCache from 'node-cache';
 import axios from 'axios';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from "@google/genai";
 import moment from 'moment-timezone';
+import { getAIReply, resetAI, translate } from './ai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +43,8 @@ let settings = {
     antispam: false,
     antimention: false,
     antitag: false,
+    welcome: false,
+    goodbye: false,
     menuImage: '',
     admins: [OWNER_NUMBER.split('@')[0]]
 };
@@ -89,45 +91,8 @@ let pairingCode = "";
 let isPairing = false;
 let botSock: any = null;
 let onlineInterval: any = null;
-const conversationMemory: { [key: string]: any[] } = {};
-const MAX_MEMORY = 5;
 const ignoredMessageIds = new Set<string>();
 const massAddingGroups = new Set<string>();
-
-function isEnglish(text: string) {
-    const allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?'-\"():;/@#&$%*+=<>[]{}\n";
-    return [...text].every(c => allowed.includes(c));
-}
-
-async function getAIReply(chatId: string, text: string) {
-    if (!isEnglish(text)) return "Please speak English 🙂";
-    
-    const history = conversationMemory[chatId] || [];
-    
-    try {
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [
-                { role: "user", parts: [{ text: "System: You are a friendly human chatting on WhatsApp. Reply in ENGLISH only. Keep replies short and natural. No long explanations." }] },
-                ...history.map(h => ({
-                    role: h.role === 'assistant' ? 'model' : 'user',
-                    parts: [{ text: h.content }]
-                })),
-                { role: "user", parts: [{ text: text }] }
-            ]
-        });
-
-        const reply = response.text || "Tell me more 🙂";
-        history.push({ role: "user", content: text });
-        history.push({ role: "assistant", content: reply });
-        conversationMemory[chatId] = history.slice(-MAX_MEMORY);
-        return reply;
-    } catch (e) {
-        console.log("AI Error:", e);
-        return "Tell me more 🙂";
-    }
-}
 
 app.use(cors());
 app.use(express.json());
@@ -336,10 +301,10 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         msgRetryCounterCache,
         generateHighQualityLinkPreview: true,
-        keepAliveIntervalMs: 30000,
+        keepAliveIntervalMs: 10000,
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        retryRequestDelayMs: 5000,
+        retryRequestDelayMs: 2000,
     });
 
     botSock = sock;
@@ -458,7 +423,6 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}broadcast
 ┃ ${PREFIX}setprefix
 ┃ ${PREFIX}setmenuimage
-┃ ${PREFIX}restart
 ┃ ${PREFIX}shutdown
 ┃ ${PREFIX}userjoin
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -485,6 +449,8 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}unmute
 ┃ ${PREFIX}opengroup
 ┃ ${PREFIX}closegroup
+┃ ${PREFIX}welcome on/off
+┃ ${PREFIX}goodbye on/off
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 🛡 PROTECTION COMMANDS 〕━━┈⊷
@@ -540,10 +506,10 @@ Enjoy using TECHWIZARD!`;
             let participants = anu.participants;
             for (let num of participants) {
                 const id = typeof num === 'string' ? num : (num as any).id;
-                if (anu.action == 'add') {
+                if (anu.action == 'add' && settings.welcome) {
                     let welcomeText = `Welcome @${id.split('@')[0]} to *${metadata.subject}*! 🎉\n\nRead the rules and enjoy your stay.`;
                     await sock.sendMessage(anu.id, { text: welcomeText, mentions: [id] });
-                } else if (anu.action == 'remove') {
+                } else if (anu.action == 'remove' && settings.goodbye) {
                     let goodbyeText = `@${id.split('@')[0]} has left the group. Goodbye! 👋`;
                     await sock.sendMessage(anu.id, { text: goodbyeText, mentions: [id] });
                 }
@@ -713,7 +679,6 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}broadcast
 ┃ ${prefix}setprefix
 ┃ ${prefix}setmenuimage
-┃ ${prefix}restart
 ┃ ${prefix}shutdown
 ┃ ${prefix}userjoin
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -740,6 +705,8 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}unmute
 ┃ ${prefix}opengroup
 ┃ ${prefix}closegroup
+┃ ${prefix}welcome on/off
+┃ ${prefix}goodbye on/off
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 🛡 PROTECTION COMMANDS 〕━━┈⊷
@@ -855,7 +822,7 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'resetai':
-                        conversationMemory[from] = [];
+                        resetAI(from);
                         m.reply('AI Context reset!');
                         break;
 
@@ -1229,13 +1196,8 @@ Enjoy using TECHWIZARD!`;
                         try {
                             const [targetLang, ...toTranslate] = text.split('|');
                             if (!toTranslate.length) return m.reply('Format: .translate <lang>|<text>');
-                            const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-                            const prompt = `Translate the following text to ${targetLang}: "${toTranslate.join('|')}". Only return the translated text.`;
-                            const response = await ai.models.generateContent({
-                                model: "gemini-3-flash-preview",
-                                contents: prompt,
-                            });
-                            m.reply(`*Translation (${targetLang}):*\n${response.text}`);
+                            const result = await translate(toTranslate.join('|'), targetLang);
+                            m.reply(`*Translation (${targetLang}):*\n${result}`);
                         } catch (e) {
                             m.reply("Translation error: " + e);
                         }
@@ -1390,6 +1352,21 @@ Enjoy using TECHWIZARD!`;
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
+                    case 'welcome':
+                        if (!isAdmin) return m.reply('Admin only!');
+                        if (text === 'on') { settings.welcome = true; saveSettings(); m.reply('Welcome messages enabled!'); }
+                        else if (text === 'off') { settings.welcome = false; saveSettings(); m.reply('Welcome messages disabled!'); }
+                        else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group welcome messages.\n*Usage:* ${prefix}welcome on/off`);
+                        break;
+
+                    case 'goodbye':
+                    case 'left':
+                        if (!isAdmin) return m.reply('Admin only!');
+                        if (text === 'on') { settings.goodbye = true; saveSettings(); m.reply('Goodbye messages enabled!'); }
+                        else if (text === 'off') { settings.goodbye = false; saveSettings(); m.reply('Goodbye messages disabled!'); }
+                        else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group leave messages.\n*Usage:* ${prefix}goodbye on/off`);
+                        break;
+
                     case 'block':
                         if (!isOwner) return m.reply('Owner only!');
                         const usersBlock = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
@@ -1414,12 +1391,6 @@ Enjoy using TECHWIZARD!`;
                             await sock.sendMessage(id, { text: `*BROADCAST*\n\n${text}` });
                         }
                         m.reply(`Sent to ${groupsBc.length} groups.`);
-                        break;
-
-                    case 'restart':
-                        if (!isOwner) return m.reply('Owner only!');
-                        await m.reply('Restarting...');
-                        process.exit();
                         break;
 
                     case 'vcf':
