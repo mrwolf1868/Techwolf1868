@@ -30,7 +30,7 @@ const BOT_NAME = process.env.BOT_NAME || 'TECHWIZARD';
 let PREFIX = process.env.PREFIX || '.';
 
 // Bot Settings State
-const settings = {
+let settings = {
     autoreply: false,
     chatbot: false,
     autoread: true,
@@ -43,8 +43,29 @@ const settings = {
     antispam: false,
     antimention: false,
     antitag: false,
+    menuImage: '',
     admins: [OWNER_NUMBER.split('@')[0]]
 };
+
+// Load settings from file if exists
+const SETTINGS_FILE = './settings.json';
+if (fs.existsSync(SETTINGS_FILE)) {
+    try {
+        const savedSettings = fs.readJsonSync(SETTINGS_FILE);
+        settings = { ...settings, ...savedSettings };
+        console.log(chalk.green('Settings loaded from disk.'));
+    } catch (e) {
+        console.log(chalk.red('Error loading settings:', e));
+    }
+}
+
+function saveSettings() {
+    try {
+        fs.writeJsonSync(SETTINGS_FILE, settings, { spaces: 4 });
+    } catch (e) {
+        console.log(chalk.red('Error saving settings:', e));
+    }
+}
 
 // Spam Tracker
 const spamTracker: { [user: string]: { count: number, lastMessageTime: number } } = {};
@@ -82,32 +103,30 @@ async function getAIReply(chatId: string, text: string) {
     if (!isEnglish(text)) return "Please speak English 🙂";
     
     const history = conversationMemory[chatId] || [];
-    const systemPrompt = {
-        role: "system",
-        content: "You are a friendly human chatting on WhatsApp. Reply in ENGLISH only. Keep replies short and natural. No long explanations."
-    };
-
-    const payload = {
-        messages: [systemPrompt, ...history, { role: "user", content: text }]
-    };
-
+    
     try {
-        const response = await axios.post("https://chatbot-ji1z.onrender.com/chatbot-ji1z", payload, {
-            headers: { "Content-Type": "application/json" },
-            timeout: 15000
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: [
+                { role: "user", parts: [{ text: "System: You are a friendly human chatting on WhatsApp. Reply in ENGLISH only. Keep replies short and natural. No long explanations." }] },
+                ...history.map(h => ({
+                    role: h.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: h.content }]
+                })),
+                { role: "user", parts: [{ text: text }] }
+            ]
         });
 
-        if (response.status === 200) {
-            const reply = response.data.choices[0].message.content;
-            history.push({ role: "user", content: text });
-            history.push({ role: "assistant", content: reply });
-            conversationMemory[chatId] = history.slice(-MAX_MEMORY);
-            return reply;
-        }
+        const reply = response.text || "Tell me more 🙂";
+        history.push({ role: "user", content: text });
+        history.push({ role: "assistant", content: reply });
+        conversationMemory[chatId] = history.slice(-MAX_MEMORY);
+        return reply;
     } catch (e) {
-        console.log("External AI Error:", e);
+        console.log("AI Error:", e);
+        return "Tell me more 🙂";
     }
-    return "Tell me more 🙂";
 }
 
 app.use(cors());
@@ -151,10 +170,11 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    const { number } = req.query;
-    if (number) {
-        const phone = String(number).replace(/[^0-9]/g, '');
-        if (!phone) return res.status(400).send('Invalid number');
+    const numberParam = req.query.number as string;
+    
+    if (numberParam) {
+        const targetNumber = numberParam.replace(/[^0-9]/g, '');
+        if (!targetNumber) return res.status(400).send('Invalid number');
 
         (async () => {
             try {
@@ -171,7 +191,7 @@ app.get('/', (req, res) => {
 
                 pairingCode = "";
                 isPairing = true;
-                startBot(phone, true);
+                startBot(targetNumber, true);
 
                 let retries = 0;
                 const checkCode = setInterval(() => {
@@ -188,226 +208,46 @@ app.get('/', (req, res) => {
                 res.status(500).send('Error: ' + err);
             }
         })();
-        return;
+    } else {
+        const isConnected = botSock?.authState?.creds?.registered || false;
+        res.send(`
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>${BOT_NAME} Status</title>
+                <script src="https://cdn.tailwindcss.com"></script>
+                <style>
+                    body { background: #050505; color: #00ff00; font-family: 'Courier New', Courier, monospace; }
+                    .neon-border { border: 1px solid #00ff00; box-shadow: 0 0 15px rgba(0, 255, 0, 0.3); }
+                    .neon-text { text-shadow: 0 0 5px #00ff00; }
+                </style>
+            </head>
+            <body class="min-h-screen flex items-center justify-center p-4">
+                <div class="max-w-md w-full p-8 rounded-xl neon-border bg-black/50 backdrop-blur-sm text-center space-y-6">
+                    <h1 class="text-3xl font-bold neon-text tracking-widest uppercase">${BOT_NAME}</h1>
+                    <div class="py-4 border-y border-green-500/30">
+                        <p class="text-sm uppercase tracking-widest opacity-70">System Status</p>
+                        <p class="text-2xl font-bold ${isConnected ? 'text-green-400' : 'text-red-500'}">
+                            ${isConnected ? '● ONLINE' : '○ OFFLINE'}
+                        </p>
+                    </div>
+                    <div class="space-y-2">
+                        <p class="text-xs opacity-50 uppercase tracking-widest">Pairing Protocol</p>
+                        <p class="text-sm text-green-400/80">
+                            To initiate pairing, append your number to the URL:<br>
+                            <code class="bg-green-900/30 px-2 py-1 rounded mt-2 inline-block text-white">/?number=2547XXXXXXXX</code>
+                        </p>
+                    </div>
+                    <div class="pt-4">
+                        <p class="text-[10px] opacity-30 uppercase tracking-widest">Runtime: ${process.uptime().toFixed(0)}s</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `);
     }
-    res.send(`
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>${BOT_NAME} - Terminal</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-            <style>
-                body { font-family: 'Fira Code', monospace; background: #050505; color: #00ff00; overflow-x: hidden; }
-                .glass { background: rgba(0, 20, 0, 0.4); backdrop-filter: blur(10px); border: 1px solid rgba(0, 255, 0, 0.2); box-shadow: 0 0 20px rgba(0, 255, 0, 0.05); }
-                .neon-text { text-shadow: 0 0 5px #00ff00, 0 0 10px #00ff00; }
-                .neon-border { border: 1px solid #00ff00; box-shadow: 0 0 10px rgba(0, 255, 0, 0.2), inset 0 0 10px rgba(0, 255, 0, 0.1); }
-                .scanline {
-                    width: 100%; height: 100px; z-index: 9999; position: absolute; pointer-events: none;
-                    background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(0,255,0,0.2) 50%, rgba(0,0,0,0) 100%);
-                    opacity: 0.1; animation: scanline 6s linear infinite;
-                }
-                @keyframes scanline { 0% { top: -100px; } 100% { top: 100%; } }
-                ::-webkit-scrollbar { width: 8px; }
-                ::-webkit-scrollbar-track { background: #050505; }
-                ::-webkit-scrollbar-thumb { background: #00ff00; border-radius: 4px; }
-            </style>
-        </head>
-        <body class="min-h-screen p-4 md:p-8 relative">
-            <div class="scanline"></div>
-            
-            <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-8">
-                
-                <!-- Left Column: Deployment Guide -->
-                <div class="glass rounded-xl p-6 space-y-6 h-fit border-l-4 border-l-green-500">
-                    <div class="border-b border-green-500/30 pb-4">
-                        <h2 class="text-2xl font-bold neon-text uppercase tracking-widest">>> System_Deployment_Guide</h2>
-                        <p class="text-green-500/70 text-sm mt-2">Initialize ${BOT_NAME} on cloud infrastructure.</p>
-                    </div>
-                    
-                    <div class="space-y-6 text-sm">
-                        <div class="space-y-2">
-                            <h3 class="font-bold text-white bg-green-900/50 inline-block px-2 py-1">[01] Railway.app Deployment</h3>
-                            <ul class="list-disc list-inside space-y-1 text-green-400/80 ml-2">
-                                <li>Fork/Push the repository to your GitHub.</li>
-                                <li>Login to <a href="https://railway.app" class="text-white underline hover:text-green-300">Railway.app</a>.</li>
-                                <li>Click <b>New Project</b> -> <b>Deploy from GitHub repo</b>.</li>
-                                <li>Select your repository. Railway will auto-detect Node.js.</li>
-                            </ul>
-                        </div>
-
-                        <div class="space-y-2">
-                            <h3 class="font-bold text-white bg-green-900/50 inline-block px-2 py-1">[02] Environment Variables</h3>
-                            <p class="text-green-400/80 ml-2 mb-2">In your Railway project, go to <b>Variables</b> and add:</p>
-                            <div class="bg-black/80 p-3 rounded border border-green-500/30 font-mono text-xs space-y-1">
-                                <div><span class="text-blue-400">OWNER_NUMBER</span> = <span class="text-yellow-400">254700000000</span></div>
-                                <div><span class="text-blue-400">BOT_NAME</span> = <span class="text-yellow-400">TECHWIZARD</span></div>
-                                <div><span class="text-blue-400">PREFIX</span> = <span class="text-yellow-400">.</span></div>
-                                <div><span class="text-blue-400">GEMINI_API_KEY</span> = <span class="text-yellow-400">your_api_key_here</span></div>
-                            </div>
-                        </div>
-
-                        <div class="space-y-2">
-                            <h3 class="font-bold text-white bg-green-900/50 inline-block px-2 py-1">[03] Network Initialization</h3>
-                            <ul class="list-disc list-inside space-y-1 text-green-400/80 ml-2">
-                                <li>Go to the <b>Networking</b> tab in Railway.</li>
-                                <li>Click <b>Generate Domain</b>.</li>
-                                <li>Visit the generated domain to access this terminal.</li>
-                            </ul>
-                        </div>
-                        
-                        <div class="mt-4 p-3 bg-green-500/10 border border-green-500/30 rounded text-xs text-green-300">
-                            <span class="font-bold text-white">NOTE:</span> If deploying to a VPS, use PM2: <br>
-                            <code class="text-yellow-400">npm install -g pm2 && pm2 start npm --name "bot" -- start</code>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Right Column: Pairing Terminal -->
-                <div class="glass rounded-xl p-6 space-y-8 flex flex-col justify-center min-h-[500px] relative overflow-hidden">
-                    <!-- Decorative corner accents -->
-                    <div class="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-green-500"></div>
-                    <div class="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-green-500"></div>
-                    <div class="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-green-500"></div>
-                    <div class="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-green-500"></div>
-
-                    <div class="text-center space-y-2">
-                        <h1 class="text-4xl font-bold tracking-tighter neon-text">${BOT_NAME}</h1>
-                        <p class="text-green-500/50 text-xs uppercase tracking-widest">Secure Connection Protocol v2.0</p>
-                    </div>
-
-                    <div id="setup-view" class="space-y-6 max-w-sm mx-auto w-full">
-                        <div class="space-y-2">
-                            <label class="text-xs uppercase tracking-widest text-green-500/70 font-semibold">> Target_Phone_Number</label>
-                            <div class="relative">
-                                <span class="absolute left-4 top-3 text-green-500/50">+</span>
-                                <input type="text" id="phone-number" placeholder="254700000000" 
-                                    class="w-full bg-black/80 border border-green-500/50 rounded px-8 py-3 focus:outline-none focus:border-green-400 focus:shadow-[0_0_10px_rgba(0,255,0,0.2)] transition-all text-lg tracking-wider text-green-400 placeholder-green-900">
-                            </div>
-                        </div>
-                        <button onclick="startPairing()" id="pair-btn"
-                            class="w-full bg-green-900/40 hover:bg-green-500 hover:text-black border border-green-500 text-green-400 font-bold py-3 rounded transition-all uppercase tracking-widest text-sm">
-                            [ Execute_Pairing ]
-                        </button>
-                    </div>
-
-                    <div id="code-view" class="hidden space-y-6 text-center max-w-sm mx-auto w-full">
-                        <div class="space-y-2">
-                            <p class="text-green-500/70 text-xs uppercase">> Awaiting_Device_Input</p>
-                            <div id="pairing-code-display" class="text-5xl font-bold tracking-[0.2em] py-6 neon-text bg-black/50 border border-green-500/30 rounded">
-                                <span class="animate-pulse">.... ....</span>
-                            </div>
-                        </div>
-                        <div class="text-xs text-green-400/60 bg-black/50 p-4 rounded border border-green-500/20 text-left">
-                            > Settings <br>
-                            > Linked Devices <br>
-                            > Link a Device <br>
-                            > Link with phone number instead
-                        </div>
-                        <div class="flex flex-col items-center space-y-4">
-                            <div class="flex items-center justify-center space-x-2 text-green-500/50 text-xs animate-pulse">
-                                <div class="w-2 h-2 bg-green-500 rounded-sm"></div>
-                                <span>Establishing secure tunnel...</span>
-                            </div>
-                            <button onclick="location.reload()" class="text-green-500/40 hover:text-green-400 text-[10px] uppercase tracking-widest transition-colors underline">
-                                Abort_Operation
-                            </button>
-                        </div>
-                    </div>
-
-                    <div id="success-view" class="hidden space-y-6 text-center max-w-sm mx-auto w-full">
-                        <div class="w-20 h-20 bg-green-900/30 rounded-full flex items-center justify-center mx-auto neon-border">
-                            <svg class="w-10 h-10 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="square" stroke-linejoin="miter" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                            </svg>
-                        </div>
-                        <div class="space-y-2">
-                            <h2 class="text-2xl font-bold neon-text uppercase">Access_Granted</h2>
-                            <p class="text-green-500/70 text-sm">System is now online and operational.</p>
-                        </div>
-                        <div class="flex flex-col gap-3 pt-4 border-t border-green-500/20">
-                            <button onclick="location.reload()" class="text-green-500/60 hover:text-green-400 text-xs uppercase tracking-widest transition-colors">>> Reboot_Terminal</button>
-                            <button onclick="resetBot()" class="text-red-500 hover:text-red-400 text-xs uppercase tracking-widest border border-red-500/30 px-4 py-2 rounded hover:bg-red-900/20 transition-all">
-                                [ Terminate_Session ]
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <script>
-                async function resetBot() {
-                    if(!confirm('WARNING: This will terminate the current session and wipe credentials. Proceed?')) return;
-                    try {
-                        await fetch('/api/reset', { method: 'POST' });
-                        alert('Session terminated. Rebooting terminal.');
-                        location.reload();
-                    } catch(e) {
-                        alert('ERR: ' + e);
-                    }
-                }
-
-                async function startPairing() {
-                    const phone = document.getElementById('phone-number').value.replace(/[^0-9]/g, '');
-                    if (!phone) return alert('ERR: Invalid target number');
-                    
-                    const btn = document.getElementById('pair-btn');
-                    btn.disabled = true;
-                    btn.innerText = '[ Processing... ]';
-                    btn.classList.add('opacity-50', 'cursor-not-allowed');
-
-                    try {
-                        const res = await fetch('/api/pair', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ phone })
-                        });
-                        const data = await res.json();
-                        
-                        if (data.status === 'success') {
-                            document.getElementById('setup-view').classList.add('hidden');
-                            document.getElementById('code-view').classList.remove('hidden');
-                            pollCode();
-                        } else {
-                            alert('ERR: ' + data.message);
-                            btn.disabled = false;
-                            btn.innerText = '[ Execute_Pairing ]';
-                            btn.classList.remove('opacity-50', 'cursor-not-allowed');
-                        }
-                    } catch (e) {
-                        alert('ERR: Connection failed');
-                        btn.disabled = false;
-                        btn.innerText = '[ Execute_Pairing ]';
-                        btn.classList.remove('opacity-50', 'cursor-not-allowed');
-                    }
-                }
-
-                async function pollCode() {
-                    const interval = setInterval(async () => {
-                        try {
-                            const res = await fetch('/api/status');
-                            const data = await res.json();
-                            
-                            if (data.code) {
-                                document.getElementById('pairing-code-display').innerText = data.code;
-                            }
-                            
-                            if (data.connected) {
-                                clearInterval(interval);
-                                document.getElementById('code-view').classList.add('hidden');
-                                document.getElementById('success-view').classList.remove('hidden');
-                            }
-                        } catch(e) {
-                            console.error('Polling error', e);
-                        }
-                    }, 2000);
-                }
-            </script>
-        </body>
-        </html>
-    `);
 });
 
 app.post('/api/pair', async (req, res) => {
@@ -526,8 +366,13 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startBot(phoneNumber, isNewPairing);
-            else isPairing = false;
+            console.log(chalk.yellow(`[!] Connection closed. Reconnecting: ${shouldReconnect}`));
+            if (shouldReconnect) {
+                setTimeout(() => startBot(phoneNumber, isNewPairing), 5000); // 5s delay to prevent loops
+            } else {
+                isPairing = false;
+                console.log(chalk.red('[!] Logged out. Please pair again.'));
+            }
         } else if (connection === 'open') {
             console.log(chalk.green(`\n[+] ${BOT_NAME} CONNECTED SUCCESSFULLY!\n`));
             isPairing = false;
@@ -969,24 +814,43 @@ Enjoy using TECHWIZARD!`;
 
                     case 'reminder':
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Sets a quick reminder.\n*Usage:* ${prefix}reminder <time>|<message>\n*Example:* ${prefix}reminder 10s|Check the door`);
-                        const [timeRem, ...remText] = text.split('|');
-                        m.reply(`Reminder set for ${timeRem}!`);
+                        const [timeRem, ...remTextParts] = text.split('|');
+                        const remMessage = remTextParts.join('|');
+                        if (!remMessage) return m.reply('Please provide a message for the reminder.');
+                        
+                        let delayMs = 0;
+                        const timeMatch = timeRem.toLowerCase().match(/(\d+)(s|m|h|d)/);
+                        if (timeMatch) {
+                            const val = parseInt(timeMatch[1]);
+                            const unit = timeMatch[2];
+                            if (unit === 's') delayMs = val * 1000;
+                            else if (unit === 'm') delayMs = val * 60 * 1000;
+                            else if (unit === 'h') delayMs = val * 60 * 60 * 1000;
+                            else if (unit === 'd') delayMs = val * 24 * 60 * 60 * 1000;
+                        } else {
+                            delayMs = parseInt(timeRem) * 1000; // Default to seconds if just a number
+                        }
+
+                        if (isNaN(delayMs) || delayMs <= 0) return m.reply('Invalid time format! Use e.g. 10s, 5m, 1h');
+                        if (delayMs > 24 * 60 * 60 * 1000 * 7) return m.reply('Reminder cannot be set for more than 7 days.');
+
+                        m.reply(`Reminder set for ${timeRem}! I will notify you then.`);
                         setTimeout(() => {
-                            sock.sendMessage(from, { text: `⏰ REMINDER: ${remText.join('|')}` }, { quoted: m });
-                        }, 10000); // Simple 10s for demo, would need parsing for real use
+                            sock.sendMessage(from, { text: `⏰ *REMINDER:* ${remMessage}` }, { quoted: m });
+                        }, delayMs);
                         break;
 
                     case 'autoreply':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoreply = true; m.reply('Autoreply enabled!'); }
-                        else if (text === 'off') { settings.autoreply = false; m.reply('Autoreply disabled!'); }
+                        if (text === 'on') { settings.autoreply = true; saveSettings(); m.reply('Autoreply enabled!'); }
+                        else if (text === 'off') { settings.autoreply = false; saveSettings(); m.reply('Autoreply disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automated replies.\n*Usage:* ${prefix}autoreply on/off`);
                         break;
 
                     case 'chatbot':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.chatbot = true; m.reply('Chatbot enabled!'); }
-                        else if (text === 'off') { settings.chatbot = false; m.reply('Chatbot disabled!'); }
+                        if (text === 'on') { settings.chatbot = true; saveSettings(); m.reply('Chatbot enabled!'); }
+                        else if (text === 'off') { settings.chatbot = false; saveSettings(); m.reply('Chatbot disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles AI chatbot for all messages.\n*Usage:* ${prefix}chatbot on/off`);
                         break;
 
@@ -1005,6 +869,7 @@ Enjoy using TECHWIZARD!`;
                         if (!newAdmin) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Adds a user to the bot admin list.\n*Usage:* ${prefix}addadmin <tag/number>\n*Example:* ${prefix}addadmin @user`);
                         if (settings.admins.includes(newAdmin)) return m.reply('Already admin!');
                         settings.admins.push(newAdmin);
+                        saveSettings();
                         m.reply(`@${newAdmin} is now an admin!`);
                         break;
 
@@ -1012,7 +877,9 @@ Enjoy using TECHWIZARD!`;
                         if (!isOwner) return m.reply('Owner only!');
                         const remAdmin = m.mentionedJid[0] ? m.mentionedJid[0].split('@')[0] : text.replace(/[^0-9]/g, '');
                         if (!remAdmin) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Removes a user from the bot admin list.\n*Usage:* ${prefix}removeadmin <tag/number>\n*Example:* ${prefix}removeadmin @user`);
+                        if (remAdmin === OWNER_NUMBER.split('@')[0]) return m.reply('Cannot remove the main owner!');
                         settings.admins = settings.admins.filter(a => a !== remAdmin);
+                        saveSettings();
                         m.reply(`@${remAdmin} removed from admins!`);
                         break;
 
@@ -1025,7 +892,17 @@ Enjoy using TECHWIZARD!`;
 
                     case 'setmenuimage':
                         if (!isAdmin) return m.reply('Admin only!');
-                        m.reply('Feature coming soon!');
+                        if (!m.quoted || m.quoted.mtype !== 'imageMessage') return m.reply(`Reply to an image with ${prefix}setmenuimage to change the menu header.`);
+                        try {
+                            const media = await m.quoted.download();
+                            const imagePath = './menu_image.jpg';
+                            await fs.writeFile(imagePath, media);
+                            settings.menuImage = imagePath;
+                            saveSettings();
+                            m.reply('Menu image updated successfully!');
+                        } catch (e) {
+                            m.reply('Failed to update menu image: ' + e);
+                        }
                         break;
 
                     case 'shutdown':
@@ -1041,43 +918,43 @@ Enjoy using TECHWIZARD!`;
 
                     case 'autoread':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoread = true; m.reply('Autoread enabled!'); }
-                        else if (text === 'off') { settings.autoread = false; m.reply('Autoread disabled!'); }
+                        if (text === 'on') { settings.autoread = true; saveSettings(); m.reply('Autoread enabled!'); }
+                        else if (text === 'off') { settings.autoread = false; saveSettings(); m.reply('Autoread disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reading of messages.\n*Usage:* ${prefix}autoread on/off`);
                         break;
 
                     case 'autotyping':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autotyping = true; m.reply('Autotyping enabled!'); }
-                        else if (text === 'off') { settings.autotyping = false; m.reply('Autotyping disabled!'); }
+                        if (text === 'on') { settings.autotyping = true; saveSettings(); m.reply('Autotyping enabled!'); }
+                        else if (text === 'off') { settings.autotyping = false; saveSettings(); m.reply('Autotyping disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "typing..." status simulation.\n*Usage:* ${prefix}autotyping on/off`);
                         break;
 
                     case 'autorecording':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autorecording = true; m.reply('Autorecording enabled!'); }
-                        else if (text === 'off') { settings.autorecording = false; m.reply('Autorecording disabled!'); }
+                        if (text === 'on') { settings.autorecording = true; saveSettings(); m.reply('Autorecording enabled!'); }
+                        else if (text === 'off') { settings.autorecording = false; saveSettings(); m.reply('Autorecording disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "recording..." status simulation.\n*Usage:* ${prefix}autorecording on/off`);
                         break;
 
                     case 'autoreact':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoreact = true; m.reply('Autoreact enabled!'); }
-                        else if (text === 'off') { settings.autoreact = false; m.reply('Autoreact disabled!'); }
+                        if (text === 'on') { settings.autoreact = true; saveSettings(); m.reply('Autoreact enabled!'); }
+                        else if (text === 'off') { settings.autoreact = false; saveSettings(); m.reply('Autoreact disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
                     case 'autoadd':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoadd = true; m.reply('Autoadd enabled!'); }
-                        else if (text === 'off') { settings.autoadd = false; m.reply('Autoadd disabled!'); }
+                        if (text === 'on') { settings.autoadd = true; saveSettings(); m.reply('Autoadd enabled!'); }
+                        else if (text === 'off') { settings.autoadd = false; saveSettings(); m.reply('Autoadd disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-accepting group invites.\n*Usage:* ${prefix}autoadd on/off`);
                         break;
 
                     case 'alwaysonline':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.alwaysonline = true; m.reply('Always online enabled!'); }
-                        else if (text === 'off') { settings.alwaysonline = false; m.reply('Always online disabled!'); }
+                        if (text === 'on') { settings.alwaysonline = true; saveSettings(); m.reply('Always online enabled!'); }
+                        else if (text === 'off') { settings.alwaysonline = false; saveSettings(); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
                         break;
 
@@ -1320,22 +1197,22 @@ Enjoy using TECHWIZARD!`;
 
                     case 'antispam':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antispam = true; m.reply('Antispam enabled!'); }
-                        else if (text === 'off') { settings.antispam = false; m.reply('Antispam disabled!'); }
+                        if (text === 'on') { settings.antispam = true; saveSettings(); m.reply('Antispam enabled!'); }
+                        else if (text === 'off') { settings.antispam = false; saveSettings(); m.reply('Antispam disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-spam protection.\n*Usage:* ${prefix}antispam on/off`);
                         break;
 
                     case 'antimention':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antimention = true; m.reply('Antimention enabled!'); }
-                        else if (text === 'off') { settings.antimention = false; m.reply('Antimention disabled!'); }
+                        if (text === 'on') { settings.antimention = true; saveSettings(); m.reply('Antimention enabled!'); }
+                        else if (text === 'off') { settings.antimention = false; saveSettings(); m.reply('Antimention disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-mention protection.\n*Usage:* ${prefix}antimention on/off`);
                         break;
 
                     case 'antitag':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antitag = true; m.reply('Antitag enabled!'); }
-                        else if (text === 'off') { settings.antitag = false; m.reply('Antitag disabled!'); }
+                        if (text === 'on') { settings.antitag = true; saveSettings(); m.reply('Antitag enabled!'); }
+                        else if (text === 'off') { settings.antitag = false; saveSettings(); m.reply('Antitag disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-tag protection.\n*Usage:* ${prefix}antitag on/off`);
                         break;
 
@@ -1466,32 +1343,50 @@ Enjoy using TECHWIZARD!`;
 
                     case 'play':
                         if (!text) return m.reply(`Example: ${prefix}play faded`);
-                        const ytsPlay = await import('yt-search');
-                        const searchPlay = await ytsPlay.default(text);
-                        const videoPlay = searchPlay.videos[0];
-                        if (!videoPlay) return m.reply('No results found!');
-                        await sock.sendMessage(from, { 
-                            image: { url: videoPlay.thumbnail }, 
-                            caption: `*PLAYING*\n\n*Title:* ${videoPlay.title}\n*Duration:* ${videoPlay.timestamp}\n*Views:* ${videoPlay.views}\n\nDownloading audio...` 
-                        }, { quoted: m });
                         try {
+                            const ytsPlay = await import('yt-search');
+                            const searchPlay = await ytsPlay.default(text);
+                            const videoPlay = searchPlay.videos[0];
+                            if (!videoPlay) return m.reply('No results found!');
+                            
+                            await sock.sendMessage(from, { 
+                                image: { url: videoPlay.thumbnail }, 
+                                caption: `*PLAYING*\n\n*Title:* ${videoPlay.title}\n*Duration:* ${videoPlay.timestamp}\n*Author:* ${videoPlay.author.name}\n*Views:* ${videoPlay.views}\n\nDownloading audio...` 
+                            }, { quoted: m });
+
                             const ytdl = await import('ytdl-core');
-                            const stream = ytdl.default(videoPlay.url, { filter: 'audioonly' });
+                            // Use a more robust way to get audio stream
+                            const stream = ytdl.default(videoPlay.url, { 
+                                filter: 'audioonly',
+                                quality: 'highestaudio',
+                                highWaterMark: 1 << 25 
+                            });
+                            
                             const chunks: any[] = [];
                             stream.on('data', (chunk) => chunks.push(chunk));
+                            stream.on('error', (err) => {
+                                console.log('ytdl error:', err);
+                                m.reply("Download failed. YouTube might be blocking the request.");
+                            });
                             stream.on('end', async () => {
+                                if (chunks.length === 0) return;
                                 const buffer = Buffer.concat(chunks);
-                                await sock.sendMessage(from, { audio: buffer, mimetype: 'audio/mp4' }, { quoted: m });
+                                await sock.sendMessage(from, { 
+                                    audio: buffer, 
+                                    mimetype: 'audio/mp4',
+                                    fileName: `${videoPlay.title}.mp3`
+                                }, { quoted: m });
                             });
                         } catch (e) {
-                            m.reply("Download failed. ytdl-core might be restricted.");
+                            console.log('Play error:', e);
+                            m.reply("An error occurred while processing your request.");
                         }
                         break;
 
                     case 'antilink':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antilink = true; m.reply('Antilink enabled!'); }
-                        else if (text === 'off') { settings.antilink = false; m.reply('Antilink disabled!'); }
+                        if (text === 'on') { settings.antilink = true; saveSettings(); m.reply('Antilink enabled!'); }
+                        else if (text === 'off') { settings.antilink = false; saveSettings(); m.reply('Antilink disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
@@ -1528,32 +1423,36 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'vcf':
-                        if (m.isGroup && (!m.quoted || m.quoted.mtype !== 'documentMessage')) {
-                            const groupMetadataVcf = await sock.groupMetadata(from);
-                            const participantsVcf = groupMetadataVcf.participants;
-                            let vcfData = '';
-                            for (let i = 0; i < participantsVcf.length; i++) {
-                                const jid = participantsVcf[i].id;
-                                const number = jid.split('@')[0];
-                                vcfData += `BEGIN:VCARD\nVERSION:3.0\nFN:Group Member ${i + 1}\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD\n`;
+                        try {
+                            if (m.isGroup && (!m.quoted || m.quoted.mtype !== 'documentMessage')) {
+                                const groupMetadataVcf = await sock.groupMetadata(from);
+                                const participantsVcf = groupMetadataVcf.participants;
+                                let vcfData = '';
+                                for (let i = 0; i < participantsVcf.length; i++) {
+                                    const jid = participantsVcf[i].id;
+                                    const number = jid.split('@')[0];
+                                    vcfData += `BEGIN:VCARD\nVERSION:3.0\nFN:Group Member ${i + 1}\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD\n`;
+                                }
+                                const vcfPath = `./${groupMetadataVcf.subject.replace(/[^a-zA-Z0-9]/g, '_')}.vcf`;
+                                await fs.writeFile(vcfPath, vcfData);
+                                await sock.sendMessage(from, { 
+                                    document: await fs.readFile(vcfPath), 
+                                    mimetype: 'text/vcard', 
+                                    fileName: `${groupMetadataVcf.subject}.vcf` 
+                                }, { quoted: m });
+                                await fs.unlink(vcfPath);
+                            } else if (m.quoted && m.quoted.mtype === 'documentMessage') {
+                                let vcfBuffer = await m.quoted.download();
+                                let vcfText = vcfBuffer.toString();
+                                let numbers = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '')) || [];
+                                if (numbers.length === 0) return m.reply('No numbers found in VCF!');
+                                m.reply(`Extracted ${numbers.length} numbers. Saving contacts...`);
+                                m.reply(`Numbers: ${numbers.join(', ')}`);
+                            } else {
+                                m.reply(`Use ${prefix}vcf in a group to get all members' contacts, or reply to a VCF file to extract numbers.`);
                             }
-                            const vcfPath = `./${groupMetadataVcf.subject}.vcf`;
-                            await fs.writeFile(vcfPath, vcfData);
-                            await sock.sendMessage(from, { 
-                                document: await fs.readFile(vcfPath), 
-                                mimetype: 'text/vcard', 
-                                fileName: `${groupMetadataVcf.subject}.vcf` 
-                            }, { quoted: m });
-                            await fs.unlink(vcfPath);
-                        } else if (m.quoted && m.quoted.mtype === 'documentMessage') {
-                            let vcfBuffer = await m.quoted.download();
-                            let vcfText = vcfBuffer.toString();
-                            let numbers = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '')) || [];
-                            if (numbers.length === 0) return m.reply('No numbers found in VCF!');
-                            m.reply(`Extracted ${numbers.length} numbers. Saving contacts...`);
-                            m.reply(`Numbers: ${numbers.join(', ')}`);
-                        } else {
-                            m.reply(`Use ${prefix}vcf in a group to get all members' contacts, or reply to a VCF file to extract numbers.`);
+                        } catch (e) {
+                            m.reply("VCF Error: " + e);
                         }
                         break;
                 }
