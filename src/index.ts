@@ -151,6 +151,45 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/', (req, res) => {
+    const { number } = req.query;
+    if (number) {
+        const phone = String(number).replace(/[^0-9]/g, '');
+        if (!phone) return res.status(400).send('Invalid number');
+
+        (async () => {
+            try {
+                if (botSock) {
+                    try {
+                        botSock.ev.removeAllListeners();
+                        botSock.end(undefined);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    } catch (e) {}
+                }
+                if (fs.existsSync('session')) {
+                    try { fs.emptyDirSync('session'); } catch (e) {}
+                }
+
+                pairingCode = "";
+                isPairing = true;
+                startBot(phone, true);
+
+                let retries = 0;
+                const checkCode = setInterval(() => {
+                    if (pairingCode) {
+                        clearInterval(checkCode);
+                        res.send(pairingCode);
+                    } else if (retries > 20) {
+                        clearInterval(checkCode);
+                        res.status(500).send('Timeout generating code');
+                    }
+                    retries++;
+                }, 1000);
+            } catch (err) {
+                res.status(500).send('Error: ' + err);
+            }
+        })();
+        return;
+    }
     res.send(`
         <!DOCTYPE html>
         <html lang="en">
