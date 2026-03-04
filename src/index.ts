@@ -809,6 +809,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}shorturl
 ┃ ${prefix}qr
 ┃ ${prefix}readqr
+┃ ${prefix}vv
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
@@ -933,14 +934,14 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'setprefix':
-                        if (!isAdmin) return m.reply('Admin only!');
+                        if (!isOwner) return m.reply('Owner only!');
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Changes the bot command prefix.\n*Usage:* ${prefix}setprefix <symbol>\n*Example:* ${prefix}setprefix !`);
                         PREFIX = text;
                         m.reply(`Prefix changed to: ${PREFIX}`);
                         break;
 
                     case 'setmenuimage':
-                        if (!isAdmin) return m.reply('Admin only!');
+                        if (!isOwner) return m.reply('Owner only!');
                         if (!m.quoted || m.quoted.mtype !== 'imageMessage') return m.reply(`Reply to an image with ${prefix}setmenuimage to change the menu header.`);
                         try {
                             const media = await m.quoted.download();
@@ -1350,6 +1351,24 @@ Enjoy using TECHWIZARD!`;
                         let mediaToImg = await m.quoted.download();
                         await sock.sendMessage(from, { image: mediaToImg, caption: 'Done!' }, { quoted: m });
                         break;
+
+                    case 'vv':
+                    case 'viewonce': {
+                        if (!m.quoted || (m.quoted.mtype !== 'imageMessage' && m.quoted.mtype !== 'videoMessage')) {
+                            return m.reply('Reply to a view once message with .vv');
+                        }
+                        try {
+                            const media = await m.quoted.download();
+                            if (m.quoted.mtype === 'imageMessage') {
+                                await sock.sendMessage(from, { image: media, caption: 'View Once Image Retrieved' }, { quoted: m });
+                            } else {
+                                await sock.sendMessage(from, { video: media, caption: 'View Once Video Retrieved' }, { quoted: m });
+                            }
+                        } catch (e) {
+                            m.reply('Failed to retrieve view once media: ' + e);
+                        }
+                        break;
+                    }
 
                     case 'tagall':
                         if (!m.isGroup) return m.reply('This command is for groups only!');
