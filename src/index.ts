@@ -111,8 +111,21 @@ app.post('/connect', async (req, res) => {
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
 
     const targetNumber = phoneNumber.replace(/[^0-9]/g, '');
-    if (botSocks[targetNumber]?.authState?.creds?.registered) {
-        return res.status(403).json({ error: 'Bot is already connected and active for this number.' });
+    
+    // Stop existing bot if any
+    if (botSocks[targetNumber]) {
+        try {
+            botSocks[targetNumber].ev.removeAllListeners();
+            botSocks[targetNumber].end(undefined);
+            delete botSocks[targetNumber];
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (e) {}
+    }
+
+    // Clear session for fresh pairing
+    const sessionPath = path.join('sessions', targetNumber);
+    if (fs.existsSync(sessionPath)) {
+        try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
     }
 
     if (pairingStates[targetNumber]) return res.status(429).json({ error: 'A pairing process is already in progress for this number.' });
@@ -139,15 +152,27 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', uptime: process.uptime() });
 });
 
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
     const numberParam = req.query.number as string;
     
     if (numberParam) {
         const targetNumber = numberParam.replace(/[^0-9]/g, '');
         if (!targetNumber) return res.status(400).send('Invalid number');
 
-        if (botSocks[targetNumber]?.authState?.creds?.registered) {
-            return res.status(403).send('Bot is already connected for this number.');
+        // Stop existing bot if any
+        if (botSocks[targetNumber]) {
+            try {
+                botSocks[targetNumber].ev.removeAllListeners();
+                botSocks[targetNumber].end(undefined);
+                delete botSocks[targetNumber];
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (e) {}
+        }
+
+        // Clear session for fresh pairing
+        const sessionPath = path.join('sessions', targetNumber);
+        if (fs.existsSync(sessionPath)) {
+            try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
         }
 
         if (pairingStates[targetNumber]) return res.status(429).send('A pairing process is already active for this number.');
@@ -227,8 +252,21 @@ app.post('/api/pair', async (req, res) => {
     if (!phone) return res.json({ status: 'error', message: 'Phone number required' });
     
     const targetNumber = phone.replace(/[^0-9]/g, '');
-    if (botSocks[targetNumber]?.authState?.creds?.registered) {
-        return res.json({ status: 'error', message: 'Bot is already connected for this number.' });
+    
+    // Stop existing bot if any
+    if (botSocks[targetNumber]) {
+        try {
+            botSocks[targetNumber].ev.removeAllListeners();
+            botSocks[targetNumber].end(undefined);
+            delete botSocks[targetNumber];
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (e) {}
+    }
+
+    // Clear session for fresh pairing
+    const sessionPath = path.join('sessions', targetNumber);
+    if (fs.existsSync(sessionPath)) {
+        try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
     }
 
     if (pairingStates[targetNumber]) return res.json({ status: 'error', message: 'Pairing already in progress for this number.' });
