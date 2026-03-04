@@ -112,27 +112,29 @@ app.post('/connect', async (req, res) => {
 
     const targetNumber = phoneNumber.replace(/[^0-9]/g, '');
     
-    // Stop existing bot if any
-    if (botSocks[targetNumber]) {
-        try {
-            botSocks[targetNumber].ev.removeAllListeners();
-            botSocks[targetNumber].end(undefined);
-            delete botSocks[targetNumber];
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (e) {}
+    if (!pairingStates[targetNumber]) {
+        // Only stop and delete if the bot is ALREADY registered
+        if (botSocks[targetNumber]?.authState?.creds?.registered) {
+            if (botSocks[targetNumber]) {
+                try {
+                    botSocks[targetNumber].ev.removeAllListeners();
+                    botSocks[targetNumber].end(undefined);
+                    delete botSocks[targetNumber];
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (e) {}
+            }
+
+            // Clear session for fresh pairing
+            const sessionPath = path.join('sessions', targetNumber);
+            if (fs.existsSync(sessionPath)) {
+                try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
+            }
+        }
+
+        pairingCodes[targetNumber] = "";
+        pairingStates[targetNumber] = true;
+        startBot(targetNumber, true);
     }
-
-    // Clear session for fresh pairing
-    const sessionPath = path.join('sessions', targetNumber);
-    if (fs.existsSync(sessionPath)) {
-        try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
-    }
-
-    if (pairingStates[targetNumber]) return res.status(429).json({ error: 'A pairing process is already in progress for this number.' });
-
-    pairingCodes[targetNumber] = "";
-    pairingStates[targetNumber] = true;
-    startBot(targetNumber, true);
 
     let retries = 0;
     const checkCode = setInterval(() => {
@@ -159,45 +161,43 @@ app.get('/', async (req, res) => {
         const targetNumber = numberParam.replace(/[^0-9]/g, '');
         if (!targetNumber) return res.status(400).send('Invalid number');
 
-        // Stop existing bot if any
-        if (botSocks[targetNumber]) {
-            try {
-                botSocks[targetNumber].ev.removeAllListeners();
-                botSocks[targetNumber].end(undefined);
-                delete botSocks[targetNumber];
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            } catch (e) {}
-        }
+        if (!pairingStates[targetNumber]) {
+            // Only stop and delete if the bot is ALREADY registered
+            if (botSocks[targetNumber]?.authState?.creds?.registered) {
+                if (botSocks[targetNumber]) {
+                    try {
+                        botSocks[targetNumber].ev.removeAllListeners();
+                        botSocks[targetNumber].end(undefined);
+                        delete botSocks[targetNumber];
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    } catch (e) {}
+                }
 
-        // Clear session for fresh pairing
-        const sessionPath = path.join('sessions', targetNumber);
-        if (fs.existsSync(sessionPath)) {
-            try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
-        }
+                // Clear session for fresh pairing
+                const sessionPath = path.join('sessions', targetNumber);
+                if (fs.existsSync(sessionPath)) {
+                    try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
+                }
+            }
 
-        if (pairingStates[targetNumber]) return res.status(429).send('A pairing process is already active for this number.');
+            pairingCodes[targetNumber] = "";
+            pairingStates[targetNumber] = true;
+            startBot(targetNumber, true);
+        }
 
         (async () => {
-            try {
-                pairingCodes[targetNumber] = "";
-                pairingStates[targetNumber] = true;
-                startBot(targetNumber, true);
-
-                let retries = 0;
-                const checkCode = setInterval(() => {
-                    if (pairingCodes[targetNumber]) {
-                        clearInterval(checkCode);
-                        res.send(pairingCodes[targetNumber]);
-                    } else if (retries > 30) {
-                        clearInterval(checkCode);
-                        pairingStates[targetNumber] = false;
-                        res.status(500).send('Timeout generating code');
-                    }
-                    retries++;
-                }, 1000);
-            } catch (err) {
-                res.status(500).send('Error: ' + err);
-            }
+            let retries = 0;
+            const checkCode = setInterval(() => {
+                if (pairingCodes[targetNumber]) {
+                    clearInterval(checkCode);
+                    res.send(pairingCodes[targetNumber]);
+                } else if (retries > 30) {
+                    clearInterval(checkCode);
+                    pairingStates[targetNumber] = false;
+                    res.status(500).send('Timeout generating code');
+                }
+                retries++;
+            }, 1000);
         })();
     } else {
         const activeSessions = Object.keys(botSocks).filter(num => botSocks[num]?.authState?.creds?.registered);
@@ -253,39 +253,41 @@ app.post('/api/pair', async (req, res) => {
     
     const targetNumber = phone.replace(/[^0-9]/g, '');
     
-    // Stop existing bot if any
-    if (botSocks[targetNumber]) {
-        try {
-            botSocks[targetNumber].ev.removeAllListeners();
-            botSocks[targetNumber].end(undefined);
-            delete botSocks[targetNumber];
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (e) {}
+    if (!pairingStates[targetNumber]) {
+        // Only stop and delete if the bot is ALREADY registered
+        if (botSocks[targetNumber]?.authState?.creds?.registered) {
+            if (botSocks[targetNumber]) {
+                try {
+                    botSocks[targetNumber].ev.removeAllListeners();
+                    botSocks[targetNumber].end(undefined);
+                    delete botSocks[targetNumber];
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (e) {}
+            }
+
+            // Clear session for fresh pairing
+            const sessionPath = path.join('sessions', targetNumber);
+            if (fs.existsSync(sessionPath)) {
+                try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
+            }
+        }
+
+        pairingCodes[targetNumber] = "";
+        pairingStates[targetNumber] = true;
+        
+        // Start bot in background
+        (async () => {
+            try {
+                startBot(targetNumber, true);
+            } catch (err) {
+                console.log('Pairing error:', err);
+                pairingStates[targetNumber] = false;
+            }
+        })();
     }
-
-    // Clear session for fresh pairing
-    const sessionPath = path.join('sessions', targetNumber);
-    if (fs.existsSync(sessionPath)) {
-        try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
-    }
-
-    if (pairingStates[targetNumber]) return res.json({ status: 'error', message: 'Pairing already in progress for this number.' });
-
-    pairingCodes[targetNumber] = "";
-    pairingStates[targetNumber] = true;
     
     // Send response immediately to avoid "Initializing..." hang
     res.json({ status: 'success' });
-
-    // Start bot in background
-    (async () => {
-        try {
-            startBot(targetNumber, true);
-        } catch (err) {
-            console.log('Pairing error:', err);
-            pairingStates[targetNumber] = false;
-        }
-    })();
 });
 
 app.post('/api/reset', async (req, res) => {
@@ -382,13 +384,15 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ["Chrome (Linux)", "", ""],
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         msgRetryCounterCache: botRetryCache,
         generateHighQualityLinkPreview: true,
-        keepAliveIntervalMs: 10000,
+        keepAliveIntervalMs: 30000,
         markOnlineOnConnect: true,
         syncFullHistory: false,
-        retryRequestDelayMs: 2000,
+        retryRequestDelayMs: 5000,
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
     });
 
     botSocks[phoneNumber] = sock;
@@ -445,17 +449,6 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
                 console.log('Auto-join channel failed:', e);
             }
 
-            // Always Online Logic
-            if (onlineInterval) clearInterval(onlineInterval);
-            onlineInterval = setInterval(async () => {
-                for (const num in botSocks) {
-                    const botSet = getSettings(num);
-                    if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
-                        await botSocks[num].sendPresenceUpdate('available');
-                    }
-                }
-            }, 10000);
-            
             // Send Welcome Message & Menu ONLY on new pairing
             if (isNewPairing) {
                 try {
@@ -1737,6 +1730,18 @@ app.listen(PORT, '0.0.0.0', () => {
             : `http://localhost:${PORT}/health`;
         axios.get(pingUrl).catch(() => {});
     }, 5 * 60 * 1000); // Every 5 minutes
+
+    // Always Online Global Interval
+    setInterval(async () => {
+        for (const num in botSocks) {
+            try {
+                const botSet = getSettings(num);
+                if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
+                    await botSocks[num].sendPresenceUpdate('available');
+                }
+            } catch (e) {}
+        }
+    }, 20000); // Every 20 seconds
 
     // Start all sessions
     if (fs.existsSync('sessions')) {
