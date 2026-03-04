@@ -673,7 +673,7 @@ Enjoy using TECHWIZARD!`;
             if (settings.autorecording) await sock.sendPresenceUpdate('recording', from);
 
             // Chatbot Logic
-            if (!isCmd && settings.chatbot && !m.key.fromMe && sock.user?.id && m.sender !== sock.user.id && !m.sender.startsWith(sock.user.id.split(':')[0])) {
+            if (!isCmd && settings.chatbot && !m.key.fromMe && !m.isBaileys && sock.user?.id && m.sender !== sock.user.id && !m.sender.startsWith(sock.user.id.split(':')[0])) {
                 if (m.isGroup) {
                     const botNumber = sock.user.id.split(':')[0];
                     const isMentioned = m.mentionedJid.some((jid: string) => jid.startsWith(botNumber));
@@ -891,14 +891,12 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'autoreply':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autoreply = true; saveSettings(phoneNumber); m.reply('Autoreply enabled!'); }
                         else if (text === 'off') { settings.autoreply = false; saveSettings(phoneNumber); m.reply('Autoreply disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automated replies.\n*Usage:* ${prefix}autoreply on/off`);
                         break;
 
                     case 'chatbot':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.chatbot = true; saveSettings(phoneNumber); m.reply('Chatbot enabled!'); }
                         else if (text === 'off') { settings.chatbot = false; saveSettings(phoneNumber); m.reply('Chatbot disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles AI chatbot for all messages.\n*Usage:* ${prefix}chatbot on/off`);
@@ -910,6 +908,7 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'admin':
+                        if (!isOwner) return m.reply('Owner only!');
                         m.reply(`*ADMINS list:* \n\n${settings.admins.map(a => `@${a}`).join('\n')}`);
                         break;
 
@@ -963,47 +962,41 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'userjoin':
-                        if (!isAdmin) return m.reply('Admin only!');
+                        if (!isOwner) return m.reply('Owner only!');
                         m.reply('User join logs enabled!');
                         break;
 
                     case 'autoread':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autoread = true; saveSettings(phoneNumber); m.reply('Autoread enabled!'); }
                         else if (text === 'off') { settings.autoread = false; saveSettings(phoneNumber); m.reply('Autoread disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reading of messages.\n*Usage:* ${prefix}autoread on/off`);
                         break;
 
                     case 'autotyping':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autotyping = true; saveSettings(phoneNumber); m.reply('Autotyping enabled!'); }
                         else if (text === 'off') { settings.autotyping = false; saveSettings(phoneNumber); m.reply('Autotyping disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "typing..." status simulation.\n*Usage:* ${prefix}autotyping on/off`);
                         break;
 
                     case 'autorecording':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autorecording = true; saveSettings(phoneNumber); m.reply('Autorecording enabled!'); }
                         else if (text === 'off') { settings.autorecording = false; saveSettings(phoneNumber); m.reply('Autorecording disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "recording..." status simulation.\n*Usage:* ${prefix}autorecording on/off`);
                         break;
 
                     case 'autoreact':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autoreact = true; saveSettings(phoneNumber); m.reply('Autoreact enabled!'); }
                         else if (text === 'off') { settings.autoreact = false; saveSettings(phoneNumber); m.reply('Autoreact disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
                     case 'autoadd':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.autoadd = true; saveSettings(phoneNumber); m.reply('Autoadd enabled!'); }
                         else if (text === 'off') { settings.autoadd = false; saveSettings(phoneNumber); m.reply('Autoadd disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-accepting group invites.\n*Usage:* ${prefix}autoadd on/off`);
                         break;
 
                     case 'alwaysonline':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
                         else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
@@ -1023,7 +1016,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'add':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Adds a member to the group.\n*Usage:* ${prefix}add <number>\n*Example:* ${prefix}add 254700000000`);
                         const addJid = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         await sock.groupParticipantsUpdate(from, [addJid], 'add');
@@ -1032,7 +1024,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'addall':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         let participantsToAdd: string[] = [];
                         if (m.quoted && m.quoted.mtype === 'documentMessage') {
                             const vcfBuffer = await m.quoted.download();
@@ -1077,7 +1068,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'stopadd':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (massAddingGroups.has(from)) {
                             massAddingGroups.delete(from);
                             m.reply('Stopping mass add process...');
@@ -1103,7 +1093,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'kick':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         const kickJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!kickJid || kickJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Kicks a member from the group.\n*Usage:* ${prefix}kick <tag/reply/number>`);
                         await sock.groupParticipantsUpdate(from, [kickJid], 'remove');
@@ -1112,7 +1101,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'promote':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         const promJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!promJid || promJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Promotes a member to group admin.\n*Usage:* ${prefix}promote <tag/reply/number>`);
                         await sock.groupParticipantsUpdate(from, [promJid], 'promote');
@@ -1121,7 +1109,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'demote':
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         const demJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!demJid || demJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Demotes a group admin to member.\n*Usage:* ${prefix}demote <tag/reply/number>`);
                         await sock.groupParticipantsUpdate(from, [demJid], 'demote');
@@ -1143,7 +1130,6 @@ Enjoy using TECHWIZARD!`;
                     case 'mute':
                     case 'closegroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         
                         if (!groupSchedules[from]) groupSchedules[from] = {};
                         
@@ -1196,7 +1182,6 @@ Enjoy using TECHWIZARD!`;
                     case 'unmute':
                     case 'opengroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isAdmin) return m.reply('Admin only!');
                         
                         if (!groupSchedules[from]) groupSchedules[from] = {};
                         
@@ -1247,28 +1232,24 @@ Enjoy using TECHWIZARD!`;
                     }
 
                     case 'antispam':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.antispam = true; saveSettings(phoneNumber); m.reply('Antispam enabled!'); }
                         else if (text === 'off') { settings.antispam = false; saveSettings(phoneNumber); m.reply('Antispam disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-spam protection.\n*Usage:* ${prefix}antispam on/off`);
                         break;
 
                     case 'antimention':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.antimention = true; saveSettings(phoneNumber); m.reply('Antimention enabled!'); }
                         else if (text === 'off') { settings.antimention = false; saveSettings(phoneNumber); m.reply('Antimention disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-mention protection.\n*Usage:* ${prefix}antimention on/off`);
                         break;
 
                     case 'antitag':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.antitag = true; saveSettings(phoneNumber); m.reply('Antitag enabled!'); }
                         else if (text === 'off') { settings.antitag = false; saveSettings(phoneNumber); m.reply('Antitag disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-tag protection.\n*Usage:* ${prefix}antitag on/off`);
                         break;
 
                     case 'warn':
-                        if (!isAdmin) return m.reply('Admin only!');
                         const warnJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!warnJid || warnJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Issues a warning to a member.\n*Usage:* ${prefix}warn <tag/reply/number>`);
                         m.reply(`@${warnJid.split('@')[0]} has been warned!`, from, { mentions: [warnJid] });
@@ -1430,14 +1411,12 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'antilink':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.antilink = true; saveSettings(phoneNumber); m.reply('Antilink enabled!'); }
                         else if (text === 'off') { settings.antilink = false; saveSettings(phoneNumber); m.reply('Antilink disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
                     case 'welcome':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.welcome = true; saveSettings(phoneNumber); m.reply('Welcome messages enabled!'); }
                         else if (text === 'off') { settings.welcome = false; saveSettings(phoneNumber); m.reply('Welcome messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group welcome messages.\n*Usage:* ${prefix}welcome on/off`);
@@ -1445,7 +1424,6 @@ Enjoy using TECHWIZARD!`;
 
                     case 'goodbye':
                     case 'left':
-                        if (!isAdmin) return m.reply('Admin only!');
                         if (text === 'on') { settings.goodbye = true; saveSettings(phoneNumber); m.reply('Goodbye messages enabled!'); }
                         else if (text === 'off') { settings.goodbye = false; saveSettings(phoneNumber); m.reply('Goodbye messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group leave messages.\n*Usage:* ${prefix}goodbye on/off`);
