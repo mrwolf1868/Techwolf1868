@@ -30,42 +30,50 @@ const BOT_NAME = process.env.BOT_NAME || 'TECHWIZARD';
 let PREFIX = process.env.PREFIX || '.';
 
 // Bot Settings State
-let settings = {
-    autoreply: false,
-    chatbot: false,
-    autoread: true,
-    autotyping: false,
-    autorecording: false,
-    autoreact: false,
-    autoadd: false,
-    alwaysonline: true,
-    antilink: false,
-    antispam: false,
-    antimention: false,
-    antitag: false,
-    welcome: false,
-    goodbye: false,
-    menuImage: '',
-    admins: [OWNER_NUMBER.split('@')[0]]
-};
+const botSettings: { [phone: string]: any } = {};
 
-// Load settings from file if exists
-const SETTINGS_FILE = './settings.json';
-if (fs.existsSync(SETTINGS_FILE)) {
-    try {
-        const savedSettings = fs.readJsonSync(SETTINGS_FILE);
-        settings = { ...settings, ...savedSettings };
-        console.log(chalk.green('Settings loaded from disk.'));
-    } catch (e) {
-        console.log(chalk.red('Error loading settings:', e));
+function getSettings(phone: string) {
+    if (botSettings[phone]) return botSettings[phone];
+    
+    const defaultSettings = {
+        autoreply: false,
+        chatbot: false,
+        autoread: true,
+        autotyping: false,
+        autorecording: false,
+        autoreact: false,
+        autoadd: false,
+        alwaysonline: true,
+        antilink: false,
+        antispam: false,
+        antimention: false,
+        antitag: false,
+        welcome: false,
+        goodbye: false,
+        menuImage: '',
+        admins: [OWNER_NUMBER.split('@')[0]]
+    };
+
+    const settingsFile = `./sessions/${phone}/settings.json`;
+    if (fs.existsSync(settingsFile)) {
+        try {
+            const saved = fs.readJsonSync(settingsFile);
+            botSettings[phone] = { ...defaultSettings, ...saved };
+            return botSettings[phone];
+        } catch (e) {}
     }
+    
+    botSettings[phone] = defaultSettings;
+    return defaultSettings;
 }
 
-function saveSettings() {
+function saveSettings(phone: string) {
     try {
-        fs.writeJsonSync(SETTINGS_FILE, settings, { spaces: 4 });
+        const settingsFile = `./sessions/${phone}/settings.json`;
+        fs.ensureDirSync(path.dirname(settingsFile));
+        fs.writeJsonSync(settingsFile, botSettings[phone], { spaces: 4 });
     } catch (e) {
-        console.log(chalk.red('Error saving settings:', e));
+        console.log(chalk.red(`Error saving settings for ${phone}:`, e));
     }
 }
 
@@ -87,9 +95,9 @@ const PORT = Number(process.env.PORT) || 3000;
 process.on('uncaughtException', (err) => console.error('Caught exception:', err));
 process.on('unhandledRejection', (reason, p) => console.error('Unhandled Rejection at:', p, 'reason:', reason));
 
-let pairingCode = "";
-let isPairing = false;
-let botSock: any = null;
+const pairingCodes: { [phone: string]: string } = {};
+const pairingStates: { [phone: string]: boolean } = {};
+const botSocks: { [phone: string]: any } = {};
 let onlineInterval: any = null;
 const ignoredMessageIds = new Set<string>();
 const massAddingGroups = new Set<string>();
@@ -102,28 +110,25 @@ app.post('/connect', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
 
-    if (botSock) {
-        try {
-            botSock.ev.removeAllListeners();
-            botSock.end(undefined);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (e) {}
-    }
-    if (fs.existsSync('session')) {
-        try { fs.emptyDirSync('session'); } catch (e) {}
+    const targetNumber = phoneNumber.replace(/[^0-9]/g, '');
+    if (botSocks[targetNumber]?.authState?.creds?.registered) {
+        return res.status(403).json({ error: 'Bot is already connected and active for this number.' });
     }
 
-    pairingCode = "";
-    isPairing = true;
-    startBot(phoneNumber.replace(/[^0-9]/g, ''), true);
+    if (pairingStates[targetNumber]) return res.status(429).json({ error: 'A pairing process is already in progress for this number.' });
+
+    pairingCodes[targetNumber] = "";
+    pairingStates[targetNumber] = true;
+    startBot(targetNumber, true);
 
     let retries = 0;
     const checkCode = setInterval(() => {
-        if (pairingCode) {
+        if (pairingCodes[targetNumber]) {
             clearInterval(checkCode);
-            res.json({ code: pairingCode });
-        } else if (retries > 15) {
+            res.json({ code: pairingCodes[targetNumber] });
+        } else if (retries > 30) {
             clearInterval(checkCode);
+            pairingStates[targetNumber] = false;
             res.status(500).json({ error: 'Failed to generate pairing code' });
         }
         retries++;
@@ -141,30 +146,26 @@ app.get('/', (req, res) => {
         const targetNumber = numberParam.replace(/[^0-9]/g, '');
         if (!targetNumber) return res.status(400).send('Invalid number');
 
+        if (botSocks[targetNumber]?.authState?.creds?.registered) {
+            return res.status(403).send('Bot is already connected for this number.');
+        }
+
+        if (pairingStates[targetNumber]) return res.status(429).send('A pairing process is already active for this number.');
+
         (async () => {
             try {
-                if (botSock) {
-                    try {
-                        botSock.ev.removeAllListeners();
-                        botSock.end(undefined);
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                    } catch (e) {}
-                }
-                if (fs.existsSync('session')) {
-                    try { fs.emptyDirSync('session'); } catch (e) {}
-                }
-
-                pairingCode = "";
-                isPairing = true;
+                pairingCodes[targetNumber] = "";
+                pairingStates[targetNumber] = true;
                 startBot(targetNumber, true);
 
                 let retries = 0;
                 const checkCode = setInterval(() => {
-                    if (pairingCode) {
+                    if (pairingCodes[targetNumber]) {
                         clearInterval(checkCode);
-                        res.send(pairingCode);
-                    } else if (retries > 20) {
+                        res.send(pairingCodes[targetNumber]);
+                    } else if (retries > 30) {
                         clearInterval(checkCode);
+                        pairingStates[targetNumber] = false;
                         res.status(500).send('Timeout generating code');
                     }
                     retries++;
@@ -174,7 +175,8 @@ app.get('/', (req, res) => {
             }
         })();
     } else {
-        const isConnected = botSock?.authState?.creds?.registered || false;
+        const activeSessions = Object.keys(botSocks).filter(num => botSocks[num]?.authState?.creds?.registered);
+        const isConnected = activeSessions.length > 0;
         res.send(`
             <!DOCTYPE html>
             <html lang="en">
@@ -195,8 +197,13 @@ app.get('/', (req, res) => {
                     <div class="py-4 border-y border-green-500/30">
                         <p class="text-sm uppercase tracking-widest opacity-70">System Status</p>
                         <p class="text-2xl font-bold ${isConnected ? 'text-green-400' : 'text-red-500'}">
-                            ${isConnected ? '● ONLINE' : '○ OFFLINE'}
+                            ${isConnected ? '● ' + activeSessions.length + ' ACTIVE' : '○ OFFLINE'}
                         </p>
+                        ${activeSessions.length > 0 ? `
+                            <div class="mt-2 text-xs text-green-400/60">
+                                ${activeSessions.map(num => `<div>+${num}</div>`).join('')}
+                            </div>
+                        ` : ''}
                     </div>
                     <div class="space-y-2">
                         <p class="text-xs opacity-50 uppercase tracking-widest">Pairing Protocol</p>
@@ -219,9 +226,15 @@ app.post('/api/pair', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.json({ status: 'error', message: 'Phone number required' });
     
-    // If already pairing, we'll allow a new one to override it
-    isPairing = true;
-    pairingCode = "";
+    const targetNumber = phone.replace(/[^0-9]/g, '');
+    if (botSocks[targetNumber]?.authState?.creds?.registered) {
+        return res.json({ status: 'error', message: 'Bot is already connected for this number.' });
+    }
+
+    if (pairingStates[targetNumber]) return res.json({ status: 'error', message: 'Pairing already in progress for this number.' });
+
+    pairingCodes[targetNumber] = "";
+    pairingStates[targetNumber] = true;
     
     // Send response immediately to avoid "Initializing..." hang
     res.json({ status: 'success' });
@@ -229,57 +242,90 @@ app.post('/api/pair', async (req, res) => {
     // Start bot in background
     (async () => {
         try {
-            // Clear session for fresh pairing
-            if (botSock) {
-                try {
-                    botSock.ev.removeAllListeners();
-                    botSock.end(undefined);
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                } catch (e) {}
-            }
-
-            if (fs.existsSync('session')) {
-                try {
-                    fs.emptyDirSync('session');
-                } catch (e) {
-                    console.log('Error clearing session:', e);
-                }
-            }
-            
-            startBot(phone.replace(/[^0-9]/g, ''), true);
+            startBot(targetNumber, true);
         } catch (err) {
             console.log('Pairing error:', err);
-            isPairing = false;
+            pairingStates[targetNumber] = false;
         }
     })();
 });
 
 app.post('/api/reset', async (req, res) => {
+    const { phone } = req.body;
     try {
-        if (botSock) {
-            botSock.ev.removeAllListeners();
-            botSock.end(undefined);
+        if (phone) {
+            const targetNumber = phone.replace(/[^0-9]/g, '');
+            if (botSocks[targetNumber]) {
+                botSocks[targetNumber].ev.removeAllListeners();
+                botSocks[targetNumber].end(undefined);
+                delete botSocks[targetNumber];
+            }
+            const sessionPath = path.join('sessions', targetNumber);
+            if (fs.existsSync(sessionPath)) {
+                fs.emptyDirSync(sessionPath);
+                fs.removeSync(sessionPath);
+            }
+            res.json({ status: 'success', message: `Bot for +${targetNumber} reset successfully.` });
+        } else {
+            // Reset all
+            for (const num in botSocks) {
+                botSocks[num].ev.removeAllListeners();
+                botSocks[num].end(undefined);
+            }
+            if (fs.existsSync('sessions')) {
+                fs.emptyDirSync('sessions');
+            }
+            res.json({ status: 'success', message: 'All bots reset successfully.' });
+            process.exit(0);
         }
-        if (fs.existsSync('session')) {
-            fs.emptyDirSync('session');
-        }
-        res.json({ status: 'success', message: 'Bot reset successfully. Please pair again.' });
-        process.exit(0); // Restart process to ensure clean state
     } catch (e) {
         res.status(500).json({ status: 'error', message: String(e) });
     }
 });
 
 app.get('/api/status', (req, res) => {
-    res.json({ 
-        code: pairingCode, 
-        connected: botSock?.authState?.creds?.registered || false 
-    });
+    const { phone } = req.query;
+    if (phone) {
+        const targetNumber = (phone as string).replace(/[^0-9]/g, '');
+        res.json({ 
+            code: pairingCodes[targetNumber] || "", 
+            connected: botSocks[targetNumber]?.authState?.creds?.registered || false 
+        });
+    } else {
+        const activeSessions = Object.keys(botSocks).filter(num => botSocks[num]?.authState?.creds?.registered);
+        res.json({ 
+            connected: activeSessions.length > 0,
+            activeSessions
+        });
+    }
 });
 
 async function startBot(phoneNumber?: string, isNewPairing = false) {
-    const sessionPath = process.env.SESSION_PATH || 'session';
+    if (!phoneNumber) {
+        // Migration check: if old session exists, move it
+        if (fs.existsSync('./session/creds.json')) {
+            try {
+                const creds = fs.readJsonSync('./session/creds.json');
+                const myNumber = creds.me.id.split(':')[0];
+                const newPath = path.join('sessions', myNumber);
+                fs.ensureDirSync(newPath);
+                fs.moveSync('./session', newPath, { overwrite: true });
+                console.log(`Migrated old session to sessions/${myNumber}`);
+                return startBot(myNumber);
+            } catch (e) {
+                console.log('Migration failed:', e);
+            }
+        }
+        return;
+    }
+
+    const sessionPath = path.join('sessions', phoneNumber);
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const settings = getSettings(phoneNumber);
+    const botRetryCache = new NodeCache();
+    const botSpamTracker: { [user: string]: { count: number, lastMessageTime: number } } = {};
+    const botIgnoredMessageIds = new Set<string>();
+    const botMassAddingGroups = new Set<string>();
     
     // Fallback version if fetch fails
     let version: any = [2, 3000, 1015901307]; 
@@ -298,8 +344,8 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        msgRetryCounterCache,
+        browser: ["Chrome (Linux)", "", ""],
+        msgRetryCounterCache: botRetryCache,
         generateHighQualityLinkPreview: true,
         keepAliveIntervalMs: 10000,
         markOnlineOnConnect: true,
@@ -307,7 +353,7 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
         retryRequestDelayMs: 2000,
     });
 
-    botSock = sock;
+    botSocks[phoneNumber] = sock;
     store.bind(sock.ev);
 
     // Pairing Code Logic
@@ -316,13 +362,13 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
         setTimeout(async () => {
             try {
                 let code = await sock.requestPairingCode(phoneNumber);
-                pairingCode = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(chalk.black.bgGreen(`\n--- PAIRING CODE: ${pairingCode} ---\n`));
+                pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
             } catch (err) {
-                console.log(chalk.red(`Error requesting pairing code: ${err}`));
-                isPairing = false;
+                console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
+                pairingStates[phoneNumber] = false;
             }
-        }, 3000);
+        }, 5000);
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -331,16 +377,17 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(chalk.yellow(`[!] Connection closed. Reconnecting: ${shouldReconnect}`));
+            console.log(chalk.yellow(`[!] Connection closed for ${phoneNumber}. Reconnecting: ${shouldReconnect}`));
             if (shouldReconnect) {
                 setTimeout(() => startBot(phoneNumber, isNewPairing), 5000); // 5s delay to prevent loops
             } else {
-                isPairing = false;
-                console.log(chalk.red('[!] Logged out. Please pair again.'));
+                pairingStates[phoneNumber] = false;
+                delete botSocks[phoneNumber];
+                console.log(chalk.red(`[!] Logged out for ${phoneNumber}. Please pair again.`));
             }
         } else if (connection === 'open') {
-            console.log(chalk.green(`\n[+] ${BOT_NAME} CONNECTED SUCCESSFULLY!\n`));
-            isPairing = false;
+            console.log(chalk.green(`\n[+] ${BOT_NAME} CONNECTED SUCCESSFULLY FOR ${phoneNumber}!\n`));
+            pairingStates[phoneNumber] = false;
 
             // Auto Join Group
             try {
@@ -363,8 +410,11 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             // Always Online Logic
             if (onlineInterval) clearInterval(onlineInterval);
             onlineInterval = setInterval(async () => {
-                if (settings.alwaysonline && botSock) {
-                    await botSock.sendPresenceUpdate('available');
+                for (const num in botSocks) {
+                    const botSet = getSettings(num);
+                    if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
+                        await botSocks[num].sendPresenceUpdate('available');
+                    }
                 }
             }, 10000);
             
@@ -403,6 +453,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}runtime
 ┃ ${PREFIX}speed
 ┃ ${PREFIX}id
+┃ ${PREFIX}deploybot
 ┃ ${PREFIX}afk
 ┃ ${PREFIX}reminder
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -491,9 +542,9 @@ Enjoy using TECHWIZARD!`;
     });
 
     sock.ev.on('group-participants.update', async (anu) => {
-        console.log(`[DEBUG] Group Participants Update: ${anu.id} Action: ${anu.action}`);
+        console.log(`[DEBUG] Group Participants Update for ${phoneNumber}: ${anu.id} Action: ${anu.action}`);
         try {
-            if (massAddingGroups.has(anu.id)) return; // Skip if mass adding (silent mode)
+            if (botMassAddingGroups.has(anu.id)) return; // Skip if mass adding (silent mode)
             
             let metadata;
             try {
@@ -659,6 +710,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}runtime
 ┃ ${prefix}speed
 ┃ ${prefix}id
+┃ ${prefix}deploybot
 ┃ ${prefix}afk
 ┃ ${prefix}reminder
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -809,15 +861,15 @@ Enjoy using TECHWIZARD!`;
 
                     case 'autoreply':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoreply = true; saveSettings(); m.reply('Autoreply enabled!'); }
-                        else if (text === 'off') { settings.autoreply = false; saveSettings(); m.reply('Autoreply disabled!'); }
+                        if (text === 'on') { settings.autoreply = true; saveSettings(phoneNumber); m.reply('Autoreply enabled!'); }
+                        else if (text === 'off') { settings.autoreply = false; saveSettings(phoneNumber); m.reply('Autoreply disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automated replies.\n*Usage:* ${prefix}autoreply on/off`);
                         break;
 
                     case 'chatbot':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.chatbot = true; saveSettings(); m.reply('Chatbot enabled!'); }
-                        else if (text === 'off') { settings.chatbot = false; saveSettings(); m.reply('Chatbot disabled!'); }
+                        if (text === 'on') { settings.chatbot = true; saveSettings(phoneNumber); m.reply('Chatbot enabled!'); }
+                        else if (text === 'off') { settings.chatbot = false; saveSettings(phoneNumber); m.reply('Chatbot disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles AI chatbot for all messages.\n*Usage:* ${prefix}chatbot on/off`);
                         break;
 
@@ -836,7 +888,7 @@ Enjoy using TECHWIZARD!`;
                         if (!newAdmin) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Adds a user to the bot admin list.\n*Usage:* ${prefix}addadmin <tag/number>\n*Example:* ${prefix}addadmin @user`);
                         if (settings.admins.includes(newAdmin)) return m.reply('Already admin!');
                         settings.admins.push(newAdmin);
-                        saveSettings();
+                        saveSettings(phoneNumber);
                         m.reply(`@${newAdmin} is now an admin!`);
                         break;
 
@@ -846,7 +898,7 @@ Enjoy using TECHWIZARD!`;
                         if (!remAdmin) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Removes a user from the bot admin list.\n*Usage:* ${prefix}removeadmin <tag/number>\n*Example:* ${prefix}removeadmin @user`);
                         if (remAdmin === OWNER_NUMBER.split('@')[0]) return m.reply('Cannot remove the main owner!');
                         settings.admins = settings.admins.filter(a => a !== remAdmin);
-                        saveSettings();
+                        saveSettings(phoneNumber);
                         m.reply(`@${remAdmin} removed from admins!`);
                         break;
 
@@ -862,10 +914,11 @@ Enjoy using TECHWIZARD!`;
                         if (!m.quoted || m.quoted.mtype !== 'imageMessage') return m.reply(`Reply to an image with ${prefix}setmenuimage to change the menu header.`);
                         try {
                             const media = await m.quoted.download();
-                            const imagePath = './menu_image.jpg';
+                            const imagePath = `./sessions/${phoneNumber}/menu_image.jpg`;
+                            fs.ensureDirSync(path.dirname(imagePath));
                             await fs.writeFile(imagePath, media);
                             settings.menuImage = imagePath;
-                            saveSettings();
+                            saveSettings(phoneNumber);
                             m.reply('Menu image updated successfully!');
                         } catch (e) {
                             m.reply('Failed to update menu image: ' + e);
@@ -885,43 +938,43 @@ Enjoy using TECHWIZARD!`;
 
                     case 'autoread':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoread = true; saveSettings(); m.reply('Autoread enabled!'); }
-                        else if (text === 'off') { settings.autoread = false; saveSettings(); m.reply('Autoread disabled!'); }
+                        if (text === 'on') { settings.autoread = true; saveSettings(phoneNumber); m.reply('Autoread enabled!'); }
+                        else if (text === 'off') { settings.autoread = false; saveSettings(phoneNumber); m.reply('Autoread disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reading of messages.\n*Usage:* ${prefix}autoread on/off`);
                         break;
 
                     case 'autotyping':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autotyping = true; saveSettings(); m.reply('Autotyping enabled!'); }
-                        else if (text === 'off') { settings.autotyping = false; saveSettings(); m.reply('Autotyping disabled!'); }
+                        if (text === 'on') { settings.autotyping = true; saveSettings(phoneNumber); m.reply('Autotyping enabled!'); }
+                        else if (text === 'off') { settings.autotyping = false; saveSettings(phoneNumber); m.reply('Autotyping disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "typing..." status simulation.\n*Usage:* ${prefix}autotyping on/off`);
                         break;
 
                     case 'autorecording':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autorecording = true; saveSettings(); m.reply('Autorecording enabled!'); }
-                        else if (text === 'off') { settings.autorecording = false; saveSettings(); m.reply('Autorecording disabled!'); }
+                        if (text === 'on') { settings.autorecording = true; saveSettings(phoneNumber); m.reply('Autorecording enabled!'); }
+                        else if (text === 'off') { settings.autorecording = false; saveSettings(phoneNumber); m.reply('Autorecording disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "recording..." status simulation.\n*Usage:* ${prefix}autorecording on/off`);
                         break;
 
                     case 'autoreact':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoreact = true; saveSettings(); m.reply('Autoreact enabled!'); }
-                        else if (text === 'off') { settings.autoreact = false; saveSettings(); m.reply('Autoreact disabled!'); }
+                        if (text === 'on') { settings.autoreact = true; saveSettings(phoneNumber); m.reply('Autoreact enabled!'); }
+                        else if (text === 'off') { settings.autoreact = false; saveSettings(phoneNumber); m.reply('Autoreact disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
                     case 'autoadd':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.autoadd = true; saveSettings(); m.reply('Autoadd enabled!'); }
-                        else if (text === 'off') { settings.autoadd = false; saveSettings(); m.reply('Autoadd disabled!'); }
+                        if (text === 'on') { settings.autoadd = true; saveSettings(phoneNumber); m.reply('Autoadd enabled!'); }
+                        else if (text === 'off') { settings.autoadd = false; saveSettings(phoneNumber); m.reply('Autoadd disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-accepting group invites.\n*Usage:* ${prefix}autoadd on/off`);
                         break;
 
                     case 'alwaysonline':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.alwaysonline = true; saveSettings(); m.reply('Always online enabled!'); }
-                        else if (text === 'off') { settings.alwaysonline = false; saveSettings(); m.reply('Always online disabled!'); }
+                        if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
+                        else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
                         break;
 
@@ -1164,22 +1217,22 @@ Enjoy using TECHWIZARD!`;
 
                     case 'antispam':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antispam = true; saveSettings(); m.reply('Antispam enabled!'); }
-                        else if (text === 'off') { settings.antispam = false; saveSettings(); m.reply('Antispam disabled!'); }
+                        if (text === 'on') { settings.antispam = true; saveSettings(phoneNumber); m.reply('Antispam enabled!'); }
+                        else if (text === 'off') { settings.antispam = false; saveSettings(phoneNumber); m.reply('Antispam disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-spam protection.\n*Usage:* ${prefix}antispam on/off`);
                         break;
 
                     case 'antimention':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antimention = true; saveSettings(); m.reply('Antimention enabled!'); }
-                        else if (text === 'off') { settings.antimention = false; saveSettings(); m.reply('Antimention disabled!'); }
+                        if (text === 'on') { settings.antimention = true; saveSettings(phoneNumber); m.reply('Antimention enabled!'); }
+                        else if (text === 'off') { settings.antimention = false; saveSettings(phoneNumber); m.reply('Antimention disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-mention protection.\n*Usage:* ${prefix}antimention on/off`);
                         break;
 
                     case 'antitag':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antitag = true; saveSettings(); m.reply('Antitag enabled!'); }
-                        else if (text === 'off') { settings.antitag = false; saveSettings(); m.reply('Antitag disabled!'); }
+                        if (text === 'on') { settings.antitag = true; saveSettings(phoneNumber); m.reply('Antitag enabled!'); }
+                        else if (text === 'off') { settings.antitag = false; saveSettings(phoneNumber); m.reply('Antitag disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-tag protection.\n*Usage:* ${prefix}antitag on/off`);
                         break;
 
@@ -1347,23 +1400,23 @@ Enjoy using TECHWIZARD!`;
 
                     case 'antilink':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.antilink = true; saveSettings(); m.reply('Antilink enabled!'); }
-                        else if (text === 'off') { settings.antilink = false; saveSettings(); m.reply('Antilink disabled!'); }
+                        if (text === 'on') { settings.antilink = true; saveSettings(phoneNumber); m.reply('Antilink enabled!'); }
+                        else if (text === 'off') { settings.antilink = false; saveSettings(phoneNumber); m.reply('Antilink disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
                     case 'welcome':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.welcome = true; saveSettings(); m.reply('Welcome messages enabled!'); }
-                        else if (text === 'off') { settings.welcome = false; saveSettings(); m.reply('Welcome messages disabled!'); }
+                        if (text === 'on') { settings.welcome = true; saveSettings(phoneNumber); m.reply('Welcome messages enabled!'); }
+                        else if (text === 'off') { settings.welcome = false; saveSettings(phoneNumber); m.reply('Welcome messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group welcome messages.\n*Usage:* ${prefix}welcome on/off`);
                         break;
 
                     case 'goodbye':
                     case 'left':
                         if (!isAdmin) return m.reply('Admin only!');
-                        if (text === 'on') { settings.goodbye = true; saveSettings(); m.reply('Goodbye messages enabled!'); }
-                        else if (text === 'off') { settings.goodbye = false; saveSettings(); m.reply('Goodbye messages disabled!'); }
+                        if (text === 'on') { settings.goodbye = true; saveSettings(phoneNumber); m.reply('Goodbye messages enabled!'); }
+                        else if (text === 'off') { settings.goodbye = false; saveSettings(phoneNumber); m.reply('Goodbye messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group leave messages.\n*Usage:* ${prefix}goodbye on/off`);
                         break;
 
@@ -1426,6 +1479,24 @@ Enjoy using TECHWIZARD!`;
                             m.reply("VCF Error: " + e);
                         }
                         break;
+
+                    case 'deploybot':
+                    case 'deploy':
+                        const deployText = `*🚀 HOW TO DEPLOY TECHWIZARD BOT*
+
+To deploy your own version of this bot, follow these steps:
+
+1. Visit our deployment portal:
+🔗 http://techwolf.wuaze.com
+
+2. Follow the instructions on the site to:
+   - Get your session
+   - Configure your environment variables
+   - Deploy to your preferred hosting (Railway, Render, etc.)
+
+*Need help?* Join our support group or contact the owner.`;
+                        await sock.sendMessage(from, { text: deployText }, { quoted: m });
+                        break;
                 }
             }
 
@@ -1442,20 +1513,20 @@ Enjoy using TECHWIZARD!`;
             // Anti-spam logic
             if (settings.antispam && !isAdmin && !m.key.fromMe) {
                 const now = Date.now();
-                if (!spamTracker[sender]) spamTracker[sender] = { count: 0, lastMessageTime: now };
+                if (!botSpamTracker[sender]) botSpamTracker[sender] = { count: 0, lastMessageTime: now };
                 
-                if (now - spamTracker[sender].lastMessageTime < 2000) { // 2 seconds window
-                    spamTracker[sender].count++;
-                    if (spamTracker[sender].count >= 5) { // 5 messages in 2 seconds
+                if (now - botSpamTracker[sender].lastMessageTime < 2000) { // 2 seconds window
+                    botSpamTracker[sender].count++;
+                    if (botSpamTracker[sender].count >= 5) { // 5 messages in 2 seconds
                         try {
                             await sock.sendMessage(from, { text: `*ANTI-SPAM DETECTED*\n\n@${sender.split('@')[0]} please stop spamming!`, mentions: [sender] });
-                            spamTracker[sender].count = 0; // Reset after warning
+                            botSpamTracker[sender].count = 0; // Reset after warning
                         } catch (e) {}
                     }
                 } else {
-                    spamTracker[sender].count = 1;
+                    botSpamTracker[sender].count = 1;
                 }
-                spamTracker[sender].lastMessageTime = now;
+                botSpamTracker[sender].lastMessageTime = now;
             }
 
             // Anti-mention logic
@@ -1629,11 +1700,17 @@ app.listen(PORT, '0.0.0.0', () => {
         axios.get(pingUrl).catch(() => {});
     }, 5 * 60 * 1000); // Every 5 minutes
 
-    // Only start if session exists, otherwise wait for web UI
-    if (fs.existsSync('./session/creds.json')) {
-        console.log(chalk.blue('Session found, starting bot...'));
-        startBot();
+    // Start all sessions
+    if (fs.existsSync('sessions')) {
+        const sessions = fs.readdirSync('sessions');
+        console.log(chalk.blue(`Found ${sessions.length} sessions, starting bots...`));
+        for (const session of sessions) {
+            if (fs.existsSync(path.join('sessions', session, 'creds.json'))) {
+                startBot(session);
+            }
+        }
     } else {
-        console.log(chalk.yellow('No session found, waiting for web UI pairing...'));
+        // Migration check for single session
+        startBot();
     }
 });
