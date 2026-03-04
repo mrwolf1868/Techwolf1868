@@ -606,6 +606,10 @@ Enjoy using TECHWIZARD!`;
             const mek = chatUpdate.messages[0];
             if (!mek.message) return;
             mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message;
+            if (mek.message && (getContentType(mek.message) === 'viewOnceMessage' || getContentType(mek.message) === 'viewOnceMessageV2')) {
+                const vType = getContentType(mek.message);
+                mek.message = mek.message[vType].message;
+            }
             if (mek.key && mek.key.remoteJid === 'status@broadcast') return;
             
             const m = smsg(sock, mek, store);
@@ -707,7 +711,7 @@ Enjoy using TECHWIZARD!`;
             }
 
             // Auto React
-            if (settings.autoreact && !m.key.fromMe && !isCmd) {
+            if (settings.autoreact && m.mtype !== 'reactionMessage') {
                 try {
                     const reactions = ['❤️', '👍', '🔥', '✨', '🤖', '💯', '🙌', '🎉'];
                     const randomReaction = reactions[Math.floor(Math.random() * reactions.length)];
@@ -725,7 +729,7 @@ Enjoy using TECHWIZARD!`;
                     case 'allmenu': {
                         const uptime = process.uptime();
                         const userNumber = sender.split('@')[0];
-                        const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷
+                        const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla
 ┃ 👤 User: ${userNumber}
 ┃ 👑 Owner: @254111967697
 ┃ ⏱ Runtime: ${runtime(uptime)}
@@ -811,7 +815,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}qr
 ┃ ${prefix}readqr
 ┃ ${prefix}vv
-╰━━━━━━━━━━━━━━━┈⊷
+╰━━━━━━━━━━━━━━━┈⊷‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
 ┃ ${prefix}vcf
@@ -833,7 +837,7 @@ Enjoy using TECHWIZARD!`;
                     }
 
                     case 'alive':
-                        m.reply(`*I am alive!* ⚡\n\n*Runtime:* ${runtime(process.uptime())}\n*Bot Name:* ${BOT_NAME}`);
+                        m.reply(`*I am alive!* ⚡\n\n*Runtime:* ${runtime(process.uptime())}\n*Bot Name:* ${BOT_NAME}‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla`);
                         break;
 
                     case 'owner':
@@ -1019,12 +1023,94 @@ Enjoy using TECHWIZARD!`;
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
-                    case 'autoadd':
+                    case 'autoadd': {
                         if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        
+                        if (text === 'off') {
+                            settings.autoadd = false;
+                            saveSettings(phoneNumber);
+                            if (massAddingGroups.has(from)) {
+                                massAddingGroups.delete(from);
+                                m.reply('Autoadd disabled and ongoing mass add stopped!');
+                            } else {
+                                m.reply('Autoadd disabled!');
+                            }
+                            break;
+                        }
+
+                        // Check if it's a VCF reply for mass adding
+                        if (text.startsWith('on') && m.quoted && m.quoted.mtype === 'documentMessage') {
+                            try {
+                                let targetGroup = from;
+                                const groupLinkMatch = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/);
+                                
+                                if (!m.isGroup && !groupLinkMatch) {
+                                    return m.reply('Please provide a group link when using this command in private chat.\nExample: .autoadd on https://chat.whatsapp.com/xxx');
+                                }
+
+                                if (groupLinkMatch) {
+                                    const code = groupLinkMatch[1];
+                                    try {
+                                        const info = await sock.groupGetInviteInfo(code);
+                                        targetGroup = info.id;
+                                    } catch (e) {
+                                        return m.reply('Invalid group link or bot is not in the group.');
+                                    }
+                                }
+
+                                const vcfBuffer = await m.quoted.download();
+                                const vcfText = vcfBuffer.toString();
+                                let participantsToAdd = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '') + '@s.whatsapp.net') || [];
+                                participantsToAdd = [...new Set(participantsToAdd)];
+                                
+                                if (participantsToAdd.length === 0) return m.reply('No valid numbers found in VCF!');
+                                
+                                const botNumbers = Object.keys(botSocks);
+                                m.reply(`🚀 *SAFE MULTI-BOT MASS ADD*\n\nTarget Group: ${targetGroup}\nFound ${participantsToAdd.length} numbers.\nUsing ${botNumbers.length} bots.\nSafety Delay: 3-7s per add.\nThis process is silent.\nType ${prefix}autoadd off to stop.`);
+                                
+                                massAddingGroups.add(from);
+                                let successCount = 0;
+                                let failCount = 0;
+                                
+                                try {
+                                    // Distribute work among bots
+                                    for (let i = 0; i < participantsToAdd.length; i++) {
+                                        if (!massAddingGroups.has(from)) {
+                                            m.reply('🛑 Mass add stopped by user.');
+                                            return;
+                                        }
+                                        const jid = participantsToAdd[i];
+                                        const botIndex = i % botNumbers.length;
+                                        const botSock = botSocks[botNumbers[botIndex]];
+                                        
+                                        if (botSock) {
+                                            try {
+                                                await botSock.groupParticipantsUpdate(targetGroup, [jid], 'add');
+                                                successCount++;
+                                            } catch (e) {
+                                                failCount++;
+                                            }
+                                        }
+                                        // Safe delay to avoid bans (3-7 seconds)
+                                        const delay = Math.floor(Math.random() * 4000) + 3000;
+                                        await new Promise(resolve => setTimeout(resolve, delay));
+                                    }
+                                } finally {
+                                    massAddingGroups.delete(from);
+                                }
+                                
+                                m.reply(`✅ *SAFE MASS ADD COMPLETE*\n\nTotal Success: ${successCount}\nTotal Failed: ${failCount}`);
+                                return;
+                            } catch (e) {
+                                massAddingGroups.delete(from);
+                                return m.reply('Error processing VCF: ' + e);
+                            }
+                        }
+
                         if (text === 'on') { settings.autoadd = true; saveSettings(phoneNumber); m.reply('Autoadd enabled!'); }
-                        else if (text === 'off') { settings.autoadd = false; saveSettings(phoneNumber); m.reply('Autoadd disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-accepting group invites.\n*Usage:* ${prefix}autoadd on/off`);
                         break;
+                    }
 
                     case 'alwaysonline':
                         if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
@@ -1403,7 +1489,18 @@ Enjoy using TECHWIZARD!`;
                                 await sock.sendMessage(from, { video: media, caption: 'View Once Video Retrieved' }, { quoted: m });
                             }
                         } catch (e) {
-                            m.reply('Failed to retrieve view once media: ' + e);
+                            // Try to download directly if quoted download fails
+                            try {
+                                const qObj = await m.getQuotedObj();
+                                const media = await downloadMedia(qObj.message);
+                                if (m.quoted.mtype === 'imageMessage') {
+                                    await sock.sendMessage(from, { image: media, caption: 'View Once Image Retrieved (Direct)' }, { quoted: m });
+                                } else {
+                                    await sock.sendMessage(from, { video: media, caption: 'View Once Video Retrieved (Direct)' }, { quoted: m });
+                                }
+                            } catch (e2) {
+                                m.reply('Failed to retrieve view once media: ' + e2);
+                            }
                         }
                         break;
                     }
@@ -1687,7 +1784,7 @@ function smsg(conn: any, m: any, store: any) {
     }
     if (m.message) {
         m.mtype = getContentType(M);
-        m.msg = (m.mtype == 'viewOnceMessage' ? M.viewOnceMessage.message[getContentType(M.viewOnceMessage.message)] : M[m.mtype]);
+        m.msg = (['viewOnceMessage', 'viewOnceMessageV2'].includes(m.mtype) ? M[m.mtype].message[getContentType(M[m.mtype].message)] : M[m.mtype]);
         
         // Robust body extraction
         m.body = m.message.conversation || 
@@ -1744,13 +1841,15 @@ function smsg(conn: any, m: any, store: any) {
 async function downloadMedia(message: any) {
     let type = Object.keys(message)[0];
     let msg = message[type];
-    if (type === 'buttonsMessage' || type === 'viewOnceMessage' || type === 'ephemeralMessage') {
-        if (type === 'viewOnceMessage') {
-            msg = message.viewOnceMessage.message;
+    if (type === 'buttonsMessage' || type === 'viewOnceMessage' || type === 'viewOnceMessageV2' || type === 'ephemeralMessage') {
+        if (type === 'viewOnceMessage' || type === 'viewOnceMessageV2') {
+            msg = message[type].message;
             type = Object.keys(msg)[0];
+            msg = msg[type];
         } else if (type === 'ephemeralMessage') {
             msg = message.ephemeralMessage.message;
             type = Object.keys(msg)[0];
+            msg = msg[type];
         } else {
             msg = message.buttonsMessage.imageMessage || message.buttonsMessage.videoMessage;
             type = Object.keys(msg)[0];
@@ -1778,16 +1877,22 @@ function runtime(seconds: number) {
 	return dDisplay + hDisplay + mDisplay + sDisplay;
 }
 
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(chalk.green(`Server running on port ${PORT}`));
     
-    // Self-ping to prevent Railway/Render from sleeping
+    // Self-ping to prevent Railway/Render/AI Studio from sleeping
     setInterval(() => {
-        const pingUrl = process.env.RAILWAY_STATIC_URL 
-            ? `https://${process.env.RAILWAY_STATIC_URL}/health` 
-            : `http://localhost:${PORT}/health`;
+        const pingUrl = process.env.APP_URL 
+            ? `${process.env.APP_URL}/health` 
+            : process.env.RAILWAY_STATIC_URL 
+                ? `https://${process.env.RAILWAY_STATIC_URL}/health` 
+                : `http://localhost:${PORT}/health`;
         axios.get(pingUrl).catch(() => {});
-    }, 5 * 60 * 1000); // Every 5 minutes
+    }, 2 * 60 * 1000); // Every 2 minutes
 
     // Always Online Global Interval
     setInterval(async () => {
