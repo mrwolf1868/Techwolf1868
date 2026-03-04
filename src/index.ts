@@ -80,7 +80,7 @@ function saveSettings(phone: string) {
 // Spam Tracker
 const spamTracker: { [user: string]: { count: number, lastMessageTime: number } } = {};
 
-const groupSchedules: { [key: string]: { open?: NodeJS.Timeout, close?: NodeJS.Timeout } } = {};
+const groupSchedules: { [phone: string]: { [jid: string]: { open?: NodeJS.Timeout, close?: NodeJS.Timeout } } } = {};
 
 const msgRetryCounterCache = new NodeCache();
 const store = {
@@ -664,6 +664,7 @@ Enjoy using TECHWIZARD!`;
             const sender = m.sender || '';
             const senderNumber = sender.split('@')[0] || '';
             const isOwner = OWNER_NUMBER.includes(senderNumber);
+            const isSessionOwner = (senderNumber === phoneNumber) || isOwner;
             const isAdmin = settings.admins.includes(senderNumber) || isOwner;
 
             console.log(`[DEBUG] isCmd=${isCmd}, command=${command}, sender=${sender}`);
@@ -892,12 +893,14 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'autoreply':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autoreply = true; saveSettings(phoneNumber); m.reply('Autoreply enabled!'); }
                         else if (text === 'off') { settings.autoreply = false; saveSettings(phoneNumber); m.reply('Autoreply disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automated replies.\n*Usage:* ${prefix}autoreply on/off`);
                         break;
 
                     case 'chatbot':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.chatbot = true; saveSettings(phoneNumber); m.reply('Chatbot enabled!'); }
                         else if (text === 'off') { settings.chatbot = false; saveSettings(phoneNumber); m.reply('Chatbot disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles AI chatbot for all messages.\n*Usage:* ${prefix}chatbot on/off`);
@@ -964,40 +967,67 @@ Enjoy using TECHWIZARD!`;
 
                     case 'userjoin':
                         if (!isOwner) return m.reply('Owner only!');
-                        m.reply('User join logs enabled!');
+                        if (!text) return m.reply(`*⚠️ MISSING LINK*\n\n*Usage:* ${prefix}userjoin <group_link>`);
+                        const joinInviteCode = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/)?.[1];
+                        if (!joinInviteCode) return m.reply('Invalid WhatsApp group link!');
+                        
+                        const botNumbers = Object.keys(botSocks);
+                        m.reply(`🚀 Attempting to join ${botNumbers.length} bots to the group...`);
+                        
+                        let joinSuccess = 0;
+                        let joinFail = 0;
+                        
+                        for (const num of botNumbers) {
+                            try {
+                                const botSock = botSocks[num];
+                                if (botSock) {
+                                    await botSock.groupAcceptInvite(joinInviteCode);
+                                    joinSuccess++;
+                                }
+                            } catch (e) {
+                                joinFail++;
+                            }
+                        }
+                        m.reply(`✅ *USERJOIN COMPLETE*\n\nSuccess: ${joinSuccess}\nFailed: ${joinFail}`);
                         break;
 
                     case 'autoread':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autoread = true; saveSettings(phoneNumber); m.reply('Autoread enabled!'); }
                         else if (text === 'off') { settings.autoread = false; saveSettings(phoneNumber); m.reply('Autoread disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reading of messages.\n*Usage:* ${prefix}autoread on/off`);
                         break;
 
                     case 'autotyping':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autotyping = true; saveSettings(phoneNumber); m.reply('Autotyping enabled!'); }
                         else if (text === 'off') { settings.autotyping = false; saveSettings(phoneNumber); m.reply('Autotyping disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "typing..." status simulation.\n*Usage:* ${prefix}autotyping on/off`);
                         break;
 
                     case 'autorecording':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autorecording = true; saveSettings(phoneNumber); m.reply('Autorecording enabled!'); }
                         else if (text === 'off') { settings.autorecording = false; saveSettings(phoneNumber); m.reply('Autorecording disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "recording..." status simulation.\n*Usage:* ${prefix}autorecording on/off`);
                         break;
 
                     case 'autoreact':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autoreact = true; saveSettings(phoneNumber); m.reply('Autoreact enabled!'); }
                         else if (text === 'off') { settings.autoreact = false; saveSettings(phoneNumber); m.reply('Autoreact disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
                     case 'autoadd':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.autoadd = true; saveSettings(phoneNumber); m.reply('Autoadd enabled!'); }
                         else if (text === 'off') { settings.autoadd = false; saveSettings(phoneNumber); m.reply('Autoadd disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-accepting group invites.\n*Usage:* ${prefix}autoadd on/off`);
                         break;
 
                     case 'alwaysonline':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
                         else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
@@ -1132,7 +1162,8 @@ Enjoy using TECHWIZARD!`;
                     case 'closegroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
                         
-                        if (!groupSchedules[from]) groupSchedules[from] = {};
+                        if (!groupSchedules[phoneNumber]) groupSchedules[phoneNumber] = {};
+                        if (!groupSchedules[phoneNumber][from]) groupSchedules[phoneNumber][from] = {};
                         
                         if (text) {
                             const match = text.toLowerCase().match(/(\d{1,2}):(\d{2})\s*(am|pm)?/);
@@ -1143,7 +1174,7 @@ Enjoy using TECHWIZARD!`;
                                 if (ampm === 'pm' && hours < 12) hours += 12;
                                 if (ampm === 'am' && hours === 12) hours = 0;
                                 
-                                if (groupSchedules[from].close) clearTimeout(groupSchedules[from].close);
+                                if (groupSchedules[phoneNumber][from].close) clearTimeout(groupSchedules[phoneNumber][from].close);
                                 
                                 const scheduleClose = () => {
                                     const now = moment().tz('Africa/Nairobi');
@@ -1155,10 +1186,13 @@ Enjoy using TECHWIZARD!`;
                                     
                                     const delay = target.diff(now);
                                     
-                                    groupSchedules[from].close = setTimeout(async () => {
+                                    groupSchedules[phoneNumber][from].close = setTimeout(async () => {
                                         try {
-                                            await sock.groupSettingUpdate(from, 'announcement');
-                                            sock.sendMessage(from, { text: 'Group closed as scheduled!' });
+                                            const botSock = botSocks[phoneNumber];
+                                            if (botSock) {
+                                                await botSock.groupSettingUpdate(from, 'announcement');
+                                                await botSock.sendMessage(from, { text: 'Group closed as scheduled!' });
+                                            }
                                         } catch (e) { console.log(e); }
                                         scheduleClose(); // Reschedule for next day
                                     }, delay);
@@ -1170,9 +1204,9 @@ Enjoy using TECHWIZARD!`;
                             }
                         }
                         
-                        if (groupSchedules[from].close) {
-                            clearTimeout(groupSchedules[from].close);
-                            delete groupSchedules[from].close;
+                        if (groupSchedules[phoneNumber][from].close) {
+                            clearTimeout(groupSchedules[phoneNumber][from].close);
+                            delete groupSchedules[phoneNumber][from].close;
                             m.reply('Scheduled daily closing has been disabled.');
                         }
                         await sock.groupSettingUpdate(from, 'announcement');
@@ -1184,7 +1218,8 @@ Enjoy using TECHWIZARD!`;
                     case 'opengroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
                         
-                        if (!groupSchedules[from]) groupSchedules[from] = {};
+                        if (!groupSchedules[phoneNumber]) groupSchedules[phoneNumber] = {};
+                        if (!groupSchedules[phoneNumber][from]) groupSchedules[phoneNumber][from] = {};
                         
                         if (text) {
                             const match = text.toLowerCase().match(/(\d{1,2}):(\d{2})\s*(am|pm)?/);
@@ -1195,7 +1230,7 @@ Enjoy using TECHWIZARD!`;
                                 if (ampm === 'pm' && hours < 12) hours += 12;
                                 if (ampm === 'am' && hours === 12) hours = 0;
                                 
-                                if (groupSchedules[from].open) clearTimeout(groupSchedules[from].open);
+                                if (groupSchedules[phoneNumber][from].open) clearTimeout(groupSchedules[phoneNumber][from].open);
                                 
                                 const scheduleOpen = () => {
                                     const now = moment().tz('Africa/Nairobi');
@@ -1207,10 +1242,13 @@ Enjoy using TECHWIZARD!`;
                                     
                                     const delay = target.diff(now);
                                     
-                                    groupSchedules[from].open = setTimeout(async () => {
+                                    groupSchedules[phoneNumber][from].open = setTimeout(async () => {
                                         try {
-                                            await sock.groupSettingUpdate(from, 'not_announcement');
-                                            sock.sendMessage(from, { text: 'Group opened as scheduled!' });
+                                            const botSock = botSocks[phoneNumber];
+                                            if (botSock) {
+                                                await botSock.groupSettingUpdate(from, 'not_announcement');
+                                                await botSock.sendMessage(from, { text: 'Group opened as scheduled!' });
+                                            }
                                         } catch (e) { console.log(e); }
                                         scheduleOpen(); // Reschedule for next day
                                     }, delay);
@@ -1222,9 +1260,9 @@ Enjoy using TECHWIZARD!`;
                             }
                         }
                         
-                        if (groupSchedules[from].open) {
-                            clearTimeout(groupSchedules[from].open);
-                            delete groupSchedules[from].open;
+                        if (groupSchedules[phoneNumber][from].open) {
+                            clearTimeout(groupSchedules[phoneNumber][from].open);
+                            delete groupSchedules[phoneNumber][from].open;
                             m.reply('Scheduled daily opening has been disabled.');
                         }
                         await sock.groupSettingUpdate(from, 'not_announcement');
@@ -1430,12 +1468,14 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'antilink':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.antilink = true; saveSettings(phoneNumber); m.reply('Antilink enabled!'); }
                         else if (text === 'off') { settings.antilink = false; saveSettings(phoneNumber); m.reply('Antilink disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
                     case 'welcome':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.welcome = true; saveSettings(phoneNumber); m.reply('Welcome messages enabled!'); }
                         else if (text === 'off') { settings.welcome = false; saveSettings(phoneNumber); m.reply('Welcome messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group welcome messages.\n*Usage:* ${prefix}welcome on/off`);
@@ -1443,24 +1483,45 @@ Enjoy using TECHWIZARD!`;
 
                     case 'goodbye':
                     case 'left':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.goodbye = true; saveSettings(phoneNumber); m.reply('Goodbye messages enabled!'); }
                         else if (text === 'off') { settings.goodbye = false; saveSettings(phoneNumber); m.reply('Goodbye messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group leave messages.\n*Usage:* ${prefix}goodbye on/off`);
                         break;
 
-                    case 'block':
-                        if (!isOwner) return m.reply('Owner only!');
-                        const usersBlock = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        await sock.updateBlockStatus(usersBlock, 'block');
-                        m.reply('Blocked!');
+                    case 'block': {
+                        if (m.isGroup) return m.reply('Use this command in private inbox');
+                        const targetBlock = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                        if (!targetBlock || targetBlock === '@s.whatsapp.net') return m.reply('Please specify a user to block.');
+                        
+                        const targetNumber = targetBlock.split('@')[0];
+                        const isTargetBotUser = !!botSocks[targetNumber] || fs.existsSync(path.join('sessions', targetNumber));
+                        
+                        if (isSessionOwner || isTargetBotUser) {
+                            await sock.updateBlockStatus(targetBlock, 'block');
+                            m.reply('Blocked!');
+                        } else {
+                            m.reply('Only the user of this bot can use that command');
+                        }
                         break;
+                    }
 
-                    case 'unblock':
-                        if (!isOwner) return m.reply('Owner only!');
-                        const usersUnblock = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        await sock.updateBlockStatus(usersUnblock, 'unblock');
-                        m.reply('Unblocked!');
+                    case 'unblock': {
+                        if (m.isGroup) return m.reply('Use this command in private inbox');
+                        const targetUnblock = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                        if (!targetUnblock || targetUnblock === '@s.whatsapp.net') return m.reply('Please specify a user to unblock.');
+                        
+                        const targetNumberUn = targetUnblock.split('@')[0];
+                        const isTargetBotUserUn = !!botSocks[targetNumberUn] || fs.existsSync(path.join('sessions', targetNumberUn));
+
+                        if (isSessionOwner || isTargetBotUserUn) {
+                            await sock.updateBlockStatus(targetUnblock, 'unblock');
+                            m.reply('Unblocked!');
+                        } else {
+                            m.reply('Only the user of this bot can use that command');
+                        }
                         break;
+                    }
 
                     case 'broadcast':
                     case 'bc':
