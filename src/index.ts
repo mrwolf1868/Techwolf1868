@@ -50,6 +50,7 @@ function getSettings(phone: string) {
         antitag: false,
         welcome: false,
         goodbye: false,
+        autoviewstatus: false,
         menuImage: '',
         admins: [OWNER_NUMBER.split('@')[0]]
     };
@@ -101,6 +102,7 @@ const botSocks: { [phone: string]: any } = {};
 let onlineInterval: any = null;
 const ignoredMessageIds = new Set<string>();
 const massAddingGroups = new Set<string>();
+const viewOnceCache = new Map<string, { data: Buffer, mimetype: string }>();
 
 app.use(cors());
 app.use(express.json());
@@ -516,6 +518,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}autoreact on/off
 ┃ ${PREFIX}autoadd on/off
 ┃ ${PREFIX}alwaysonline on/off
+┃ ${PREFIX}autoviewstatus on/off
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 👥 GROUP COMMANDS 〕━━┈⊷
@@ -609,8 +612,31 @@ Enjoy using TECHWIZARD!`;
             if (mek.message && (getContentType(mek.message) === 'viewOnceMessage' || getContentType(mek.message) === 'viewOnceMessageV2')) {
                 const vType = getContentType(mek.message);
                 mek.message = mek.message[vType].message;
+                
+                // Cache view-once media
+                try {
+                    const media = await downloadMedia(mek.message);
+                    if (media) {
+                        const mimetype = mek.message.imageMessage?.mimetype || mek.message.videoMessage?.mimetype;
+                        viewOnceCache.set(mek.key.id, { data: media, mimetype });
+                        // Clear cache after 1 hour
+                        setTimeout(() => viewOnceCache.delete(mek.key.id), 3600000);
+                    }
+                } catch (e) {
+                    console.log("[DEBUG] View-once cache error:", e);
+                }
             }
-            if (mek.key && mek.key.remoteJid === 'status@broadcast') return;
+            if (mek.key && mek.key.remoteJid === 'status@broadcast') {
+                if (settings.autoviewstatus) {
+                    try {
+                        await sock.readMessages([mek.key]);
+                        console.log(`[AUTO-VIEW] Viewed status from ${mek.key.participant || mek.key.remoteJid}`);
+                    } catch (e) {
+                        console.log("[DEBUG] Failed to view status:", e);
+                    }
+                }
+                return;
+            }
             
             const m = smsg(sock, mek, store);
             if (!m) return;
@@ -688,7 +714,7 @@ Enjoy using TECHWIZARD!`;
                 try {
                     await sock.sendPresenceUpdate('composing', from);
                     const reply = await getAIReply(from, body || m.text);
-                    await sock.sendMessage(from, { text: reply }, { quoted: m });
+                    await m.reply(reply);
                 } catch (e) {
                     console.log("Chatbot error:", e);
                 }
@@ -697,7 +723,7 @@ Enjoy using TECHWIZARD!`;
             // Auto Reply (Simple Away Message)
             if (!isCmd && settings.autoreply && !settings.chatbot && !m.key.fromMe && !m.isGroup) {
                 try {
-                    await sock.sendMessage(from, { text: "Hello! I am an automated bot. The owner is currently unavailable." }, { quoted: m });
+                    await m.reply("Hello! I am an automated bot. The owner is currently unavailable.");
                 } catch (e) {}
             }
 
@@ -712,6 +738,9 @@ Enjoy using TECHWIZARD!`;
 
             // Auto React
             if (settings.autoreact && m.mtype !== 'reactionMessage') {
+                // Only react if it's NOT a command OR if it IS a command with prefix
+                // The user said "not inly commands" but also "let not one controll my bot without the exat prefix"
+                // This implies they want the bot to ignore non-prefixed command-like words.
                 try {
                     const reactions = ['❤️', '👍', '🔥', '✨', '🤖', '💯', '🙌', '🎉'];
                     const randomReaction = reactions[Math.floor(Math.random() * reactions.length)];
@@ -729,7 +758,7 @@ Enjoy using TECHWIZARD!`;
                     case 'allmenu': {
                         const uptime = process.uptime();
                         const userNumber = sender.split('@')[0];
-                        const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla
+                        const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷
 ┃ 👤 User: ${userNumber}
 ┃ 👑 Owner: @254111967697
 ┃ ⏱ Runtime: ${runtime(uptime)}
@@ -778,6 +807,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}autoreact on/off
 ┃ ${prefix}autoadd on/off
 ┃ ${prefix}alwaysonline on/off
+┃ ${prefix}autoviewstatus on/off
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 👥 GROUP COMMANDS 〕━━┈⊷
@@ -815,7 +845,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}qr
 ┃ ${prefix}readqr
 ┃ ${prefix}vv
-╰━━━━━━━━━━━━━━━┈⊷‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla
+╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
 ┃ ${prefix}vcf
@@ -823,21 +853,21 @@ Enjoy using TECHWIZARD!`;
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╰━❮ ${BOT_NAME} SYSTEM ACTIVE ❯━╯`;
-                        await sock.sendMessage(from, { text: menuText, mentions: ['254111967697@s.whatsapp.net'] }, { quoted: m });
+                        await m.reply(menuText, from, { mentions: ['254111967697@s.whatsapp.net'] });
                         break;
                     }
 
                     case 'speed':
                     case 'ping': {
                         const start = Date.now();
-                        await sock.sendMessage(from, { text: 'Pinging...' }, { quoted: m });
+                        await m.reply('Pinging...');
                         const end = Date.now();
-                        await sock.sendMessage(from, { text: `Pong! Speed: ${end - start}ms` }, { quoted: m });
+                        await m.reply(`Pong! Speed: ${end - start}ms`);
                         break;
                     }
 
                     case 'alive':
-                        m.reply(`*I am alive!* ⚡\n\n*Runtime:* ${runtime(process.uptime())}\n*Bot Name:* ${BOT_NAME}‎https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla`);
+                        m.reply(`*I am alive!* ⚡\n\n*Runtime:* ${runtime(process.uptime())}\n*Bot Name:* ${BOT_NAME}`);
                         break;
 
                     case 'owner':
@@ -847,12 +877,12 @@ Enjoy using TECHWIZARD!`;
                             + 'ORG:TechWizard;\n' // the organization of the contact
                             + 'TEL;type=CELL;type=VOICE;waid=254111967697:+254 111 967 697\n' // WhatsApp ID + phone number
                             + 'END:VCARD';
-                        await sock.sendMessage(from, { 
+                        await m.reply('', from, { 
                             contacts: { 
                                 displayName: 'TechWizard Owner', 
                                 contacts: [{ vcard }] 
                             }
-                        }, { quoted: m });
+                        });
                         break;
 
                     case 'runtime':
@@ -892,7 +922,7 @@ Enjoy using TECHWIZARD!`;
 
                         m.reply(`Reminder set for ${timeRem}! I will notify you then.`);
                         setTimeout(() => {
-                            sock.sendMessage(from, { text: `⏰ *REMINDER:* ${remMessage}` }, { quoted: m });
+                            m.reply(`⏰ *REMINDER:* ${remMessage}`);
                         }, delayMs);
                         break;
 
@@ -1039,7 +1069,7 @@ Enjoy using TECHWIZARD!`;
                         }
 
                         // Check if it's a VCF reply for mass adding
-                        if (text.startsWith('on') && m.quoted && m.quoted.mtype === 'documentMessage') {
+                        if (text.startsWith('on') && m.quoted) {
                             try {
                                 let targetGroup = from;
                                 const groupLinkMatch = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/);
@@ -1060,10 +1090,23 @@ Enjoy using TECHWIZARD!`;
 
                                 const vcfBuffer = await m.quoted.download();
                                 const vcfText = vcfBuffer.toString();
-                                let participantsToAdd = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '') + '@s.whatsapp.net') || [];
+                                // More robust VCF number extraction
+                                let participantsToAdd = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
+                                    const num = n.split(':')[1].replace(/[^0-9]/g, '');
+                                    return num.length > 5 ? num + '@s.whatsapp.net' : null;
+                                }).filter(Boolean) as string[] || [];
+                                
                                 participantsToAdd = [...new Set(participantsToAdd)];
                                 
-                                if (participantsToAdd.length === 0) return m.reply('No valid numbers found in VCF!');
+                                if (participantsToAdd.length === 0) {
+                                    // If it's not a VCF file but just a quoted message, maybe it's just a toggle
+                                    if (text === 'on') {
+                                        settings.autoadd = true;
+                                        saveSettings(phoneNumber);
+                                        return m.reply('Autoadd enabled! (No contacts found in reply)');
+                                    }
+                                    return m.reply('No valid numbers found in the replied message!');
+                                }
                                 
                                 const botNumbers = Object.keys(botSocks);
                                 m.reply(`🚀 *SAFE MULTI-BOT MASS ADD*\n\nTarget Group: ${targetGroup}\nFound ${participantsToAdd.length} numbers.\nUsing ${botNumbers.length} bots.\nSafety Delay: 3-7s per add.\nThis process is silent.\nType ${prefix}autoadd off to stop.`);
@@ -1119,13 +1162,20 @@ Enjoy using TECHWIZARD!`;
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
                         break;
 
+                    case 'autoviewstatus':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (text === 'on') { settings.autoviewstatus = true; saveSettings(phoneNumber); m.reply('Autoview status enabled! Every status will now be automatically viewed.'); }
+                        else if (text === 'off') { settings.autoviewstatus = false; saveSettings(phoneNumber); m.reply('Autoview status disabled!'); }
+                        else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automatic viewing of status updates.\n*Usage:* ${prefix}autoviewstatus on/off`);
+                        break;
+
                     case 'ai':
                     case 'ask':
                     case 'chatgpt':
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Asks the AI a question.\n*Usage:* ${prefix}ai <query>\n*Example:* ${prefix}ai What is the capital of Kenya?`);
                         try {
                             const reply = await getAIReply(from, text);
-                            await sock.sendMessage(from, { text: reply }, { quoted: m });
+                            await m.reply(reply);
                         } catch (e) {
                             m.reply("Error calling AI: " + e);
                         }
@@ -1142,10 +1192,14 @@ Enjoy using TECHWIZARD!`;
                     case 'addall':
                         if (!m.isGroup) return m.reply('Groups only!');
                         let participantsToAdd: string[] = [];
-                        if (m.quoted && m.quoted.mtype === 'documentMessage') {
+                        if (m.quoted) {
                             const vcfBuffer = await m.quoted.download();
                             const vcfText = vcfBuffer.toString();
-                            participantsToAdd = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '') + '@s.whatsapp.net') || [];
+                            // More robust VCF number extraction
+                            participantsToAdd = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
+                                const num = n.split(':')[1].replace(/[^0-9]/g, '');
+                                return num.length > 5 ? num + '@s.whatsapp.net' : null;
+                            }).filter(Boolean) as string[] || [];
                         } else if (text) {
                             participantsToAdd = text.match(/\d+/g)?.map(n => n + '@s.whatsapp.net') || [];
                         } else {
@@ -1409,7 +1463,7 @@ Enjoy using TECHWIZARD!`;
                             const axios = (await import('axios')).default;
                             const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=en&client=tw-ob`;
                             const response = await axios.get(ttsUrl, { responseType: 'arraybuffer' });
-                            await sock.sendMessage(from, { audio: Buffer.from(response.data), mimetype: 'audio/mp4', ptt: true }, { quoted: m });
+                            await m.reply('', from, { audio: Buffer.from(response.data), mimetype: 'audio/mp4', ptt: true });
                         } catch (e) {
                             m.reply("TTS Error: " + e);
                         }
@@ -1429,7 +1483,7 @@ Enjoy using TECHWIZARD!`;
                     case 'qr':
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Generates a QR code for text.\n*Usage:* ${prefix}qr <text>\n*Example:* ${prefix}qr Hello`);
                         const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(text)}&size=500x500`;
-                        await sock.sendMessage(from, { image: { url: qrUrl }, caption: `*QR Code for:* ${text}` }, { quoted: m });
+                        await m.reply('', from, { image: { url: qrUrl }, caption: `*QR Code for:* ${text}` });
                         break;
 
                     case 'readqr':
@@ -1464,7 +1518,7 @@ Enjoy using TECHWIZARD!`;
                                 quality: 70,
                                 background: 'transparent'
                             });
-                            await sock.sendMessage(from, await sticker.toMessage(), { quoted: m });
+                            await m.reply('', from, await sticker.toMessage());
                         } else {
                             m.reply(`Reply to an image or video with ${prefix}sticker`);
                         }
@@ -1473,7 +1527,7 @@ Enjoy using TECHWIZARD!`;
                     case 'toimg':
                         if (!m.quoted || m.quoted.mtype !== 'stickerMessage') return m.reply(`Reply to a sticker with ${prefix}toimg`);
                         let mediaToImg = await m.quoted.download();
-                        await sock.sendMessage(from, { image: mediaToImg, caption: 'Done!' }, { quoted: m });
+                        await m.reply('', from, { image: mediaToImg, caption: 'Done!' });
                         break;
 
                     case 'vv':
@@ -1482,11 +1536,22 @@ Enjoy using TECHWIZARD!`;
                             return m.reply('Reply to a view once message with .vv');
                         }
                         try {
+                            // Check cache first
+                            const cached = viewOnceCache.get(m.quoted.id);
+                            if (cached) {
+                                if (cached.mimetype.includes('image')) {
+                                    await m.reply('', from, { image: cached.data, caption: 'View Once Image Retrieved (Cached)' });
+                                } else {
+                                    await m.reply('', from, { video: cached.data, caption: 'View Once Video Retrieved (Cached)' });
+                                }
+                                return;
+                            }
+
                             const media = await m.quoted.download();
                             if (m.quoted.mtype === 'imageMessage') {
-                                await sock.sendMessage(from, { image: media, caption: 'View Once Image Retrieved' }, { quoted: m });
+                                await m.reply('', from, { image: media, caption: 'View Once Image Retrieved' });
                             } else {
-                                await sock.sendMessage(from, { video: media, caption: 'View Once Video Retrieved' }, { quoted: m });
+                                await m.reply('', from, { video: media, caption: 'View Once Video Retrieved' });
                             }
                         } catch (e) {
                             // Try to download directly if quoted download fails
@@ -1494,9 +1559,9 @@ Enjoy using TECHWIZARD!`;
                                 const qObj = await m.getQuotedObj();
                                 const media = await downloadMedia(qObj.message);
                                 if (m.quoted.mtype === 'imageMessage') {
-                                    await sock.sendMessage(from, { image: media, caption: 'View Once Image Retrieved (Direct)' }, { quoted: m });
+                                    await m.reply('', from, { image: media, caption: 'View Once Image Retrieved (Direct)' });
                                 } else {
-                                    await sock.sendMessage(from, { video: media, caption: 'View Once Video Retrieved (Direct)' }, { quoted: m });
+                                    await m.reply('', from, { video: media, caption: 'View Once Video Retrieved (Direct)' });
                                 }
                             } catch (e2) {
                                 m.reply('Failed to retrieve view once media: ' + e2);
@@ -1513,13 +1578,13 @@ Enjoy using TECHWIZARD!`;
                         for (let mem of participantsTag) {
                             tagTextAll += ` @${mem.id.split('@')[0]}\n`;
                         }
-                        await sock.sendMessage(from, { text: tagTextAll, mentions: participantsTag.map(a => a.id) }, { quoted: m });
+                        await m.reply(tagTextAll, from, { mentions: participantsTag.map(a => a.id) });
                         break;
 
                     case 'hidetag':
                         if (!m.isGroup) return m.reply('This command is for groups only!');
                         const groupMetadataHide = await sock.groupMetadata(from);
-                        await sock.sendMessage(from, { text: text || '', mentions: groupMetadataHide.participants.map(a => a.id) }, { quoted: m });
+                        await m.reply(text || '', from, { mentions: groupMetadataHide.participants.map(a => a.id) });
                         break;
 
                     case 'play':
@@ -1530,10 +1595,10 @@ Enjoy using TECHWIZARD!`;
                             const videoPlay = searchPlay.videos[0];
                             if (!videoPlay) return m.reply('No results found!');
                             
-                            await sock.sendMessage(from, { 
+                            await m.reply('', from, { 
                                 image: { url: videoPlay.thumbnail }, 
                                 caption: `*PLAYING*\n\n*Title:* ${videoPlay.title}\n*Duration:* ${videoPlay.timestamp}\n*Author:* ${videoPlay.author.name}\n*Views:* ${videoPlay.views}\n\nDownloading audio...` 
-                            }, { quoted: m });
+                            });
 
                             const ytdl = await import('ytdl-core');
                             // Use a more robust way to get audio stream
@@ -1552,11 +1617,11 @@ Enjoy using TECHWIZARD!`;
                             stream.on('end', async () => {
                                 if (chunks.length === 0) return;
                                 const buffer = Buffer.concat(chunks);
-                                await sock.sendMessage(from, { 
+                                await m.reply('', from, { 
                                     audio: buffer, 
                                     mimetype: 'audio/mp4',
                                     fileName: `${videoPlay.title}.mp3`
-                                }, { quoted: m });
+                                });
                             });
                         } catch (e) {
                             console.log('Play error:', e);
@@ -1627,7 +1692,7 @@ Enjoy using TECHWIZARD!`;
                         const chatsBc = await sock.groupFetchAllParticipating();
                         const groupsBc = Object.values(chatsBc).map(v => v.id);
                         for (let id of groupsBc) {
-                            await sock.sendMessage(id, { text: `*BROADCAST*\n\n${text}` });
+                            await m.reply(`*BROADCAST*\n\n${text}`, id);
                         }
                         m.reply(`Sent to ${groupsBc.length} groups.`);
                         break;
@@ -1645,16 +1710,18 @@ Enjoy using TECHWIZARD!`;
                                 }
                                 const vcfPath = `./${groupMetadataVcf.subject.replace(/[^a-zA-Z0-9]/g, '_')}.vcf`;
                                 await fs.writeFile(vcfPath, vcfData);
-                                await sock.sendMessage(from, { 
+                                await m.reply('', from, { 
                                     document: await fs.readFile(vcfPath), 
                                     mimetype: 'text/vcard', 
                                     fileName: `${groupMetadataVcf.subject}.vcf` 
-                                }, { quoted: m });
+                                });
                                 await fs.unlink(vcfPath);
-                            } else if (m.quoted && m.quoted.mtype === 'documentMessage') {
+                            } else if (m.quoted) {
                                 let vcfBuffer = await m.quoted.download();
                                 let vcfText = vcfBuffer.toString();
-                                let numbers = vcfText.match(/TEL;[^:]*:([^\n]*)/g)?.map(n => n.split(':')[1].replace(/[^0-9]/g, '')) || [];
+                                let numbers = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
+                                    return n.split(':')[1].replace(/[^0-9]/g, '');
+                                }).filter(n => n.length > 5) || [];
                                 if (numbers.length === 0) return m.reply('No numbers found in VCF!');
                                 m.reply(`Extracted ${numbers.length} numbers. Saving contacts...`);
                                 m.reply(`Numbers: ${numbers.join(', ')}`);
@@ -1681,7 +1748,7 @@ To deploy your own version of this bot, follow these steps:
    - Deploy to your preferred hosting (Railway, Render, etc.)
 
 *Need help?* Join our support group or contact the owner.`;
-                        await sock.sendMessage(from, { text: deployText }, { quoted: m });
+                        await m.reply(deployText);
                         break;
                 }
             }
@@ -1690,7 +1757,7 @@ To deploy your own version of this bot, follow these steps:
             if (settings.antilink && m.isGroup && body.match(/chat\.whatsapp\.com/gi) && !isAdmin) {
                 try {
                     await sock.sendMessage(from, { delete: m.key });
-                    await sock.sendMessage(from, { text: `*ANTI-LINK DETECTED*\n\n@${sender.split('@')[0]} has been warned. Links are not allowed!`, mentions: [sender] });
+                    await m.reply(`*ANTI-LINK DETECTED*\n\n@${sender.split('@')[0]} has been warned. Links are not allowed!`, from, { mentions: [sender] });
                 } catch (e) {
                     console.log("[DEBUG] Anti-link error:", e);
                 }
@@ -1705,7 +1772,7 @@ To deploy your own version of this bot, follow these steps:
                     botSpamTracker[sender].count++;
                     if (botSpamTracker[sender].count >= 5) { // 5 messages in 2 seconds
                         try {
-                            await sock.sendMessage(from, { text: `*ANTI-SPAM DETECTED*\n\n@${sender.split('@')[0]} please stop spamming!`, mentions: [sender] });
+                            await m.reply(`*ANTI-SPAM DETECTED*\n\n@${sender.split('@')[0]} please stop spamming!`, from, { mentions: [sender] });
                             botSpamTracker[sender].count = 0; // Reset after warning
                         } catch (e) {}
                     }
@@ -1719,7 +1786,7 @@ To deploy your own version of this bot, follow these steps:
             if (settings.antimention && m.mentionedJid && m.mentionedJid.length > 0 && !isAdmin && !m.key.fromMe) {
                 try {
                     await sock.sendMessage(from, { delete: m.key });
-                    await sock.sendMessage(from, { text: `*ANTI-MENTION DETECTED*\n\n@${sender.split('@')[0]} mentions are disabled!`, mentions: [sender] });
+                    await m.reply(`*ANTI-MENTION DETECTED*\n\n@${sender.split('@')[0]} mentions are disabled!`, from, { mentions: [sender] });
                 } catch (e) {}
             }
 
@@ -1727,7 +1794,7 @@ To deploy your own version of this bot, follow these steps:
             if (settings.antitag && m.mentionedJid && m.mentionedJid.length > 10 && !isAdmin && !m.key.fromMe) {
                 try {
                     await sock.sendMessage(from, { delete: m.key });
-                    await sock.sendMessage(from, { text: `*ANTI-TAG DETECTED*\n\n@${sender.split('@')[0]} mass tagging is disabled!`, mentions: [sender] });
+                    await m.reply(`*ANTI-TAG DETECTED*\n\n@${sender.split('@')[0]} mass tagging is disabled!`, from, { mentions: [sender] });
                 } catch (e) {}
             }
         } catch (err) {
@@ -1822,16 +1889,33 @@ function smsg(conn: any, m: any, store: any) {
             let vM = m.quoted.fakeObj = m.msg.contextInfo.quotedMessage;
             m.quoted.delete = () => conn.sendMessage(m.chat, { delete: vM.key });
             m.quoted.copyNForward = (jid: string, forceForward = false, options = {}) => conn.copyNForward(jid, vM, forceForward, options);
-            m.quoted.download = () => downloadMedia(m.quoted);
+            m.quoted.download = () => downloadMedia(m.msg.contextInfo.quotedMessage);
         }
     }
-    if (m.msg?.url) m.download = () => downloadMedia(m.msg);
+    if (m.msg?.url) m.download = () => downloadMedia(m.message);
     m.text = m.msg?.text || m.msg?.caption || m.message?.conversation || m.msg?.contentText || m.msg?.selectedDisplayText || m.msg?.title || '';
     
     // Fallback if body is still empty
     if (!m.body) m.body = m.text;
 
-    m.reply = (text: string, chatId = m.chat, options = {}) => conn.sendMessage(chatId, { text: text, ...options }, { quoted: m });
+    m.reply = (text: string, chatId = m.chat, options = {}) => conn.sendMessage(chatId, { 
+        text: text, 
+        ...options,
+        contextInfo: {
+            ...(options as any).contextInfo,
+            isForwarded: true,
+            forwardingScore: 999,
+            externalAdReply: {
+                title: "Forwarded from My Group",
+                body: "Join our community",
+                mediaType: 1,
+                thumbnailUrl: "https://picsum.photos/seed/group/200/200",
+                sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla",
+                renderLargerThumbnail: false,
+                showAdAttribution: true
+            }
+        }
+    }, { quoted: m });
     m.copy = () => smsg(conn, m, store);
     m.copyNForward = (jid = m.chat, forceForward = false, options = {}) => conn.copyNForward(jid, m, forceForward, options);
 
@@ -1839,22 +1923,19 @@ function smsg(conn: any, m: any, store: any) {
 }
 
 async function downloadMedia(message: any) {
-    let type = Object.keys(message)[0];
+    let type = getContentType(message);
     let msg = message[type];
-    if (type === 'buttonsMessage' || type === 'viewOnceMessage' || type === 'viewOnceMessageV2' || type === 'ephemeralMessage') {
-        if (type === 'viewOnceMessage' || type === 'viewOnceMessageV2') {
-            msg = message[type].message;
-            type = Object.keys(msg)[0];
-            msg = msg[type];
-        } else if (type === 'ephemeralMessage') {
-            msg = message.ephemeralMessage.message;
-            type = Object.keys(msg)[0];
-            msg = msg[type];
-        } else {
-            msg = message.buttonsMessage.imageMessage || message.buttonsMessage.videoMessage;
-            type = Object.keys(msg)[0];
-        }
+    if (type === 'viewOnceMessage' || type === 'viewOnceMessageV2' || type === 'ephemeralMessage') {
+        msg = msg.message;
+        type = getContentType(msg);
+        msg = msg[type];
     }
+    if (!msg && message.url) {
+        // Already unwrapped
+        msg = message;
+        type = getContentType({ [message.mtype || 'documentMessage']: message }); // fallback
+    }
+    
     const stream = await downloadContentFromMessage(msg, type.replace('Message', '') as any);
     let buffer = Buffer.from([]);
     for await (const chunk of stream) {
