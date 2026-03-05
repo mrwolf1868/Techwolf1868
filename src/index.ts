@@ -486,7 +486,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}runtime
 ┃ ${PREFIX}speed
 ┃ ${PREFIX}id
-┃ ${PREFIX}deploybot
+┃ ${PREFIX}deploybot / deploy
 ┃ ${PREFIX}afk
 ┃ ${PREFIX}reminder
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -495,20 +495,19 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}autoreply on/off
 ┃ ${PREFIX}chatbot on/off
 ┃ ${PREFIX}resetai
-┃ ${PREFIX}ai
-┃ ${PREFIX}ask
-┃ ${PREFIX}chatgpt
+┃ ${PREFIX}ai / ask / chatgpt
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 👑 OWNER COMMANDS 〕━━┈⊷
 ┃ ${PREFIX}admin
 ┃ ${PREFIX}addadmin
 ┃ ${PREFIX}removeadmin
-┃ ${PREFIX}broadcast
+┃ ${PREFIX}broadcast / bc
 ┃ ${PREFIX}setprefix
 ┃ ${PREFIX}setmenuimage
 ┃ ${PREFIX}shutdown
 ┃ ${PREFIX}userjoin
+┃ ${PREFIX}join / autojoin
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 ⚙️ AUTO SYSTEM 〕━━┈⊷
@@ -528,12 +527,12 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}demote
 ┃ ${PREFIX}tagall
 ┃ ${PREFIX}hidetag
+┃ ${PREFIX}addall
+┃ ${PREFIX}stopadd
 ┃ ${PREFIX}linkgc
 ┃ ${PREFIX}leave
-┃ ${PREFIX}mute
-┃ ${PREFIX}unmute
-┃ ${PREFIX}opengroup
-┃ ${PREFIX}closegroup
+┃ ${PREFIX}mute / closegroup
+┃ ${PREFIX}unmute / opengroup
 ┃ ${PREFIX}welcome on/off
 ┃ ${PREFIX}goodbye on/off
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -555,6 +554,10 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}shorturl
 ┃ ${PREFIX}qr
 ┃ ${PREFIX}readqr
+┃ ${PREFIX}vv / viewonce
+┃ ${PREFIX}sticker / s
+┃ ${PREFIX}toimg
+┃ ${PREFIX}play
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
@@ -775,7 +778,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}runtime
 ┃ ${prefix}speed
 ┃ ${prefix}id
-┃ ${prefix}deploybot
+┃ ${prefix}deploybot / deploy
 ┃ ${prefix}afk
 ┃ ${prefix}reminder
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -784,20 +787,19 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}autoreply on/off
 ┃ ${prefix}chatbot on/off
 ┃ ${prefix}resetai
-┃ ${prefix}ai
-┃ ${prefix}ask
-┃ ${prefix}chatgpt
+┃ ${prefix}ai / ask / chatgpt
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 👑 OWNER COMMANDS 〕━━┈⊷
 ┃ ${prefix}admin
 ┃ ${prefix}addadmin
 ┃ ${prefix}removeadmin
-┃ ${prefix}broadcast
+┃ ${prefix}broadcast / bc
 ┃ ${prefix}setprefix
 ┃ ${prefix}setmenuimage
 ┃ ${prefix}shutdown
 ┃ ${prefix}userjoin
+┃ ${prefix}join / autojoin
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 ⚙️ AUTO SYSTEM 〕━━┈⊷
@@ -817,12 +819,12 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}demote
 ┃ ${prefix}tagall
 ┃ ${prefix}hidetag
+┃ ${prefix}addall
+┃ ${prefix}stopadd
 ┃ ${prefix}linkgc
 ┃ ${prefix}leave
-┃ ${prefix}mute
-┃ ${prefix}unmute
-┃ ${prefix}opengroup
-┃ ${prefix}closegroup
+┃ ${prefix}mute / closegroup
+┃ ${prefix}unmute / opengroup
 ┃ ${prefix}welcome on/off
 ┃ ${prefix}goodbye on/off
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -844,7 +846,10 @@ Enjoy using TECHWIZARD!`;
 ┃ ${prefix}shorturl
 ┃ ${prefix}qr
 ┃ ${prefix}readqr
-┃ ${prefix}vv
+┃ ${prefix}vv / viewonce
+┃ ${prefix}sticker / s
+┃ ${prefix}toimg
+┃ ${prefix}play
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
