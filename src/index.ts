@@ -51,6 +51,7 @@ function getSettings(phone: string) {
         welcome: false,
         goodbye: false,
         autoviewstatus: false,
+        autoapprove: false,
         menuImage: '',
         admins: [OWNER_NUMBER.split('@')[0]]
     };
@@ -135,7 +136,14 @@ app.post('/connect', async (req, res) => {
 
         pairingCodes[targetNumber] = "";
         pairingStates[targetNumber] = true;
-        startBot(targetNumber, true);
+        (async () => {
+            try {
+                await startBot(targetNumber, true);
+            } catch (err) {
+                console.log('Pairing error:', err);
+                pairingStates[targetNumber] = false;
+            }
+        })();
     }
 
     let retries = 0;
@@ -143,7 +151,7 @@ app.post('/connect', async (req, res) => {
         if (pairingCodes[targetNumber]) {
             clearInterval(checkCode);
             res.json({ code: pairingCodes[targetNumber] });
-        } else if (retries > 30) {
+        } else if (retries > 60) {
             clearInterval(checkCode);
             pairingStates[targetNumber] = false;
             res.status(500).json({ error: 'Failed to generate pairing code' });
@@ -184,7 +192,14 @@ app.get('/', async (req, res) => {
 
             pairingCodes[targetNumber] = "";
             pairingStates[targetNumber] = true;
-            startBot(targetNumber, true);
+            (async () => {
+                try {
+                    await startBot(targetNumber, true);
+                } catch (err) {
+                    console.log('Pairing error:', err);
+                    pairingStates[targetNumber] = false;
+                }
+            })();
         }
 
         (async () => {
@@ -193,7 +208,7 @@ app.get('/', async (req, res) => {
                 if (pairingCodes[targetNumber]) {
                     clearInterval(checkCode);
                     res.send(pairingCodes[targetNumber]);
-                } else if (retries > 30) {
+                } else if (retries > 60) {
                     clearInterval(checkCode);
                     pairingStates[targetNumber] = false;
                     res.status(500).send('Timeout generating code');
@@ -280,7 +295,7 @@ app.post('/api/pair', async (req, res) => {
         // Start bot in background
         (async () => {
             try {
-                startBot(targetNumber, true);
+                await startBot(targetNumber, true);
             } catch (err) {
                 console.log('Pairing error:', err);
                 pairingStates[targetNumber] = false;
@@ -412,7 +427,7 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
                 console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
                 pairingStates[phoneNumber] = false;
             }
-        }, 5000);
+        }, 2000);
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -423,7 +438,9 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log(chalk.yellow(`[!] Connection closed for ${phoneNumber}. Reconnecting: ${shouldReconnect}`));
             if (shouldReconnect) {
-                setTimeout(() => startBot(phoneNumber, isNewPairing), 5000); // 5s delay to prevent loops
+                setTimeout(async () => {
+                    await startBot(phoneNumber, isNewPairing);
+                }, 5000); // 5s delay to prevent loops
             } else {
                 pairingStates[phoneNumber] = false;
                 delete botSocks[phoneNumber];
@@ -516,6 +533,7 @@ Enjoy using TECHWIZARD!`;
 ┃ ${PREFIX}autorecording on/off
 ┃ ${PREFIX}autoreact on/off
 ┃ ${PREFIX}autoadd on/off
+┃ ${PREFIX}autoapprove on/off
 ┃ ${PREFIX}alwaysonline on/off
 ┃ ${PREFIX}autoviewstatus on/off
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -602,6 +620,21 @@ Enjoy using TECHWIZARD!`;
                     await sock.sendMessage(anu.id, { text: goodbyeText, mentions: [id] });
                 }
             }
+
+            // Auto-approve join requests
+            if ((anu.action as string) === 'request' && settings.autoapprove) {
+                try {
+                    const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                    const botIsAdmin = metadata.participants.find(p => p.id === botId)?.admin;
+                    if (botIsAdmin) {
+                        const participantsToApprove = anu.participants.map(p => typeof p === 'string' ? p : (p as any).id);
+                        await sock.groupParticipantsUpdate(anu.id, participantsToApprove, 'approve' as any);
+                        console.log(`[AUTO-APPROVE] Approved ${participantsToApprove.length} requests in ${anu.id}`);
+                    }
+                } catch (e) {
+                    console.log(`[AUTO-APPROVE] Error:`, e);
+                }
+            }
         } catch (err) {
             console.log('Error in group-participants.update:', err);
         }
@@ -633,7 +666,12 @@ Enjoy using TECHWIZARD!`;
                 if (settings.autoviewstatus) {
                     try {
                         await sock.readMessages([mek.key]);
-                        console.log(`[AUTO-VIEW] Viewed status from ${mek.key.participant || mek.key.remoteJid}`);
+                        const participant = mek.key.participant || '';
+                        if (participant.includes(OWNER_NUMBER)) {
+                            console.log(`[AUTO-VIEW] Automatically viewed status from OWNER: ${participant}`);
+                        } else {
+                            console.log(`[AUTO-VIEW] Viewed status from ${participant || mek.key.remoteJid}`);
+                        }
                     } catch (e) {
                         console.log("[DEBUG] Failed to view status:", e);
                     }
@@ -698,7 +736,7 @@ Enjoy using TECHWIZARD!`;
             const senderNumber = sender.split('@')[0] || '';
             const isOwner = OWNER_NUMBER.includes(senderNumber);
             const isSessionOwner = (senderNumber === phoneNumber) || isOwner;
-            const isAdmin = settings.admins.includes(senderNumber) || isOwner;
+            const isAdmin = settings.admins.includes(senderNumber) || isSessionOwner;
 
             console.log(`[DEBUG] isCmd=${isCmd}, command=${command}, sender=${sender}`);
 
@@ -1160,6 +1198,13 @@ Enjoy using TECHWIZARD!`;
                         break;
                     }
 
+                    case 'autoapprove':
+                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (text === 'on') { settings.autoapprove = true; saveSettings(phoneNumber); m.reply('Autoapprove enabled! Group join requests will now be automatically approved.'); }
+                        else if (text === 'off') { settings.autoapprove = false; saveSettings(phoneNumber); m.reply('Autoapprove disabled!'); }
+                        else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automatic approval of group join requests.\n*Usage:* ${prefix}autoapprove on/off`);
+                        break;
+
                     case 'alwaysonline':
                         if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
                         if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
@@ -1189,58 +1234,132 @@ Enjoy using TECHWIZARD!`;
                     case 'add':
                         if (!m.isGroup) return m.reply('Groups only!');
                         if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Adds a member to the group.\n*Usage:* ${prefix}add <number>\n*Example:* ${prefix}add 254700000000`);
-                        const addJid = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        await sock.groupParticipantsUpdate(from, [addJid], 'add');
-                        m.reply('Added!');
+                        
+                        try {
+                            const groupMetaAdd = await sock.groupMetadata(from);
+                            const botIdAdd = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                            const botIsAdminAdd = groupMetaAdd.participants.find(p => p.id === botIdAdd)?.admin;
+                            if (!botIsAdminAdd) return m.reply('Bot must be an admin to add members!');
+
+                            const addJid = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                            await sock.groupParticipantsUpdate(from, [addJid], 'add');
+                            m.reply('Added!');
+                        } catch (e) {
+                            m.reply('Failed to add. They might have privacy settings or I might be rate-limited.');
+                        }
                         break;
 
-                    case 'addall':
+                    case 'addall': {
                         if (!m.isGroup) return m.reply('Groups only!');
                         let participantsToAdd: string[] = [];
+                        
+                        // Handle quoted message
                         if (m.quoted) {
-                            const vcfBuffer = await m.quoted.download();
-                            const vcfText = vcfBuffer.toString();
-                            // More robust VCF number extraction
-                            participantsToAdd = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
-                                const num = n.split(':')[1].replace(/[^0-9]/g, '');
+                            const q = m.quoted;
+                            if (q.mtype === 'contactMessage') {
+                                const vcard = q.msg.vcard || '';
+                                const match = vcard.match(/TEL(?:;[^:]*)?:([^\n\r]*)/i);
+                                if (match && match[1]) {
+                                    const num = match[1].replace(/[^0-9]/g, '');
+                                    if (num.length > 5) participantsToAdd = [num + '@s.whatsapp.net'];
+                                }
+                            } else if (q.mtype === 'contactsArrayMessage') {
+                                const contacts = q.msg.contacts || [];
+                                participantsToAdd = contacts.map((c: any) => {
+                                    const vcard = c.vcard || '';
+                                    const match = vcard.match(/TEL(?:;[^:]*)?:([^\n\r]*)/i);
+                                    return match && match[1] ? match[1].replace(/[^0-9]/g, '') + '@s.whatsapp.net' : null;
+                                }).filter(Boolean) as string[];
+                            } else {
+                                try {
+                                    const vcfBuffer = await q.download();
+                                    const vcfText = vcfBuffer.toString();
+                                    participantsToAdd = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
+                                        const parts = n.split(':');
+                                        if (parts.length < 2) return null;
+                                        const num = parts[1].replace(/[^0-9]/g, '');
+                                        return num.length > 5 ? num + '@s.whatsapp.net' : null;
+                                    }).filter(Boolean) as string[] || [];
+                                } catch (e) {
+                                    console.log('Download error in addall:', e);
+                                }
+                            }
+                        } else if (text) {
+                            // Improved number extraction from text
+                            participantsToAdd = text.match(/\+?\d[\d\s-]{7,}\d/g)?.map(n => {
+                                const num = n.replace(/[^0-9]/g, '');
                                 return num.length > 5 ? num + '@s.whatsapp.net' : null;
                             }).filter(Boolean) as string[] || [];
-                        } else if (text) {
-                            participantsToAdd = text.match(/\d+/g)?.map(n => n + '@s.whatsapp.net') || [];
                         } else {
-                            return m.reply(`*⚠️ MISSING SOURCE*\n\nReply to a VCF file or provide numbers.\n*Usage:* ${prefix}addall <numbers>`);
+                            return m.reply(`*⚠️ MISSING SOURCE*\n\nReply to a VCF file, a contact, or provide numbers.\n*Usage:* ${prefix}addall <numbers>`);
                         }
-                        participantsToAdd = [...new Set(participantsToAdd)];
+                        
+                        participantsToAdd = [...new Set(participantsToAdd)].filter(Boolean);
                         if (participantsToAdd.length === 0) return m.reply('No valid numbers found!');
-                        m.reply(`*🛡️ PROTECTIVE ADD MODE*\n\nFound ${participantsToAdd.length} unique numbers.\nStarting safe add process (3-6s delay/user) to prevent bans.\nWelcome messages will be suppressed.`);
-                        massAddingGroups.add(from);
-                        let successCount = 0;
-                        let failCount = 0;
+                        
                         try {
                             const groupMeta = await sock.groupMetadata(from);
+                            const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                            const botIsAdmin = groupMeta.participants.find(p => p.id.startsWith(botId.split('@')[0]))?.admin;
+                            if (!botIsAdmin) return m.reply('Bot must be an admin to add members!');
+
                             const existingParticipants = new Set(groupMeta.participants.map(p => p.id));
-                            for (const jid of participantsToAdd) {
+                            const toAdd = participantsToAdd.filter(jid => !existingParticipants.has(jid));
+                            
+                            if (toAdd.length === 0) return m.reply('All numbers are already in the group!');
+
+                            const botNumbers = Object.keys(botSocks);
+                            m.reply(`*🛡️ PROTECTIVE ADD MODE*\n\nFound ${toAdd.length} new numbers.\nUsing ${botNumbers.length} bots for distribution.\nStarting safe add process (3-7s delay) to prevent bans.`);
+                            
+                            massAddingGroups.add(from);
+                            let successCount = 0;
+                            let failCount = 0;
+
+                            for (let i = 0; i < toAdd.length; i++) {
                                 if (!massAddingGroups.has(from)) {
                                     m.reply('🛑 Mass add stopped by user.');
                                     break;
                                 }
-                                if (existingParticipants.has(jid)) continue;
-                                try {
-                                    await sock.groupParticipantsUpdate(from, [jid], 'add');
-                                    successCount++;
-                                } catch (e) {
-                                    failCount++;
+                                
+                                const jid = toAdd[i];
+                                const botIndex = i % botNumbers.length;
+                                const botNum = botNumbers[botIndex];
+                                const botSock = botSocks[botNum];
+                                
+                                // Check if this specific bot is in the group and is admin
+                                const botJid = botNum.includes('@') ? botNum : botNum + '@s.whatsapp.net';
+                                const participant = groupMeta.participants.find(p => p.id.startsWith(botJid.split('@')[0]));
+                                
+                                if (botSock && participant && participant.admin) {
+                                    try {
+                                        await botSock.groupParticipantsUpdate(from, [jid], 'add');
+                                        successCount++;
+                                    } catch (e) {
+                                        failCount++;
+                                    }
+                                } else {
+                                    // Fallback to main sock
+                                    try {
+                                        await sock.groupParticipantsUpdate(from, [jid], 'add');
+                                        successCount++;
+                                    } catch (e) {
+                                        failCount++;
+                                    }
                                 }
-                                await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 3000) + 3000));
+                                
+                                // Random delay to mimic human behavior
+                                await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 4000) + 3000));
                             }
+                            
+                            m.reply(`*✅ ADDALL COMPLETE*\n\nAdded: ${successCount}\nFailed: ${failCount}`);
                         } catch (e) {
                             console.log('Addall error:', e);
-                            m.reply('Error fetching group metadata.');
+                            m.reply('Error processing request: ' + e);
                         } finally {
                             massAddingGroups.delete(from);
                         }
-                        m.reply(`*✅ ADDALL COMPLETE*\n\nAdded: ${successCount}\nFailed/Already in: ${failCount}`);
                         break;
+                    }
 
                     case 'stopadd':
                         if (!m.isGroup) return m.reply('Groups only!');
@@ -1267,46 +1386,95 @@ Enjoy using TECHWIZARD!`;
                         }
                         break;
 
-                    case 'kick':
+                    case 'kick': {
                         if (!m.isGroup) return m.reply('Groups only!');
+                        
+                        const groupMetaKick = await sock.groupMetadata(from);
+                        const groupAdminsKick = groupMetaKick.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminKick = groupAdminsKick.includes(sender) || isAdmin;
+                        if (!isGroupAdminKick) return m.reply('Admins only!');
+
+                        const botIdKick = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const botIsAdminKick = groupMetaKick.participants.find(p => p.id === botIdKick)?.admin;
+                        if (!botIsAdminKick) return m.reply('Bot must be an admin to kick members!');
+
                         const kickJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!kickJid || kickJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Kicks a member from the group.\n*Usage:* ${prefix}kick <tag/reply/number>`);
+                        
                         await sock.groupParticipantsUpdate(from, [kickJid], 'remove');
                         m.reply('Kicked!');
                         break;
+                    }
 
-                    case 'promote':
+                    case 'promote': {
                         if (!m.isGroup) return m.reply('Groups only!');
+                        
+                        const groupMetaProm = await sock.groupMetadata(from);
+                        const groupAdminsProm = groupMetaProm.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminProm = groupAdminsProm.includes(sender) || isAdmin;
+                        if (!isGroupAdminProm) return m.reply('Admins only!');
+
+                        const botIdProm = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const botIsAdminProm = groupMetaProm.participants.find(p => p.id === botIdProm)?.admin;
+                        if (!botIsAdminProm) return m.reply('Bot must be an admin to promote members!');
+
                         const promJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!promJid || promJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Promotes a member to group admin.\n*Usage:* ${prefix}promote <tag/reply/number>`);
+                        
                         await sock.groupParticipantsUpdate(from, [promJid], 'promote');
                         m.reply('Promoted!');
                         break;
+                    }
 
-                    case 'demote':
+                    case 'demote': {
                         if (!m.isGroup) return m.reply('Groups only!');
+                        
+                        const groupMetaDem = await sock.groupMetadata(from);
+                        const groupAdminsDem = groupMetaDem.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminDem = groupAdminsDem.includes(sender) || isAdmin;
+                        if (!isGroupAdminDem) return m.reply('Admins only!');
+
+                        const botIdDem = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                        const botIsAdminDem = groupMetaDem.participants.find(p => p.id === botIdDem)?.admin;
+                        if (!botIsAdminDem) return m.reply('Bot must be an admin to demote members!');
+
                         const demJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                         if (!demJid || demJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Demotes a group admin to member.\n*Usage:* ${prefix}demote <tag/reply/number>`);
+                        
                         await sock.groupParticipantsUpdate(from, [demJid], 'demote');
                         m.reply('Demoted!');
                         break;
+                    }
 
-                    case 'linkgc':
+                    case 'linkgc': {
                         if (!m.isGroup) return m.reply('Groups only!');
+                        
+                        const groupMetaLink = await sock.groupMetadata(from);
+                        const groupAdminsLink = groupMetaLink.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminLink = groupAdminsLink.includes(sender) || isAdmin;
+                        if (!isGroupAdminLink) return m.reply('Admins only!');
+
                         const linkGc = await sock.groupInviteCode(from);
                         m.reply(`https://chat.whatsapp.com/${linkGc}`);
                         break;
+                    }
 
-                    case 'leave':
+                    case 'leave': {
                         if (!m.isGroup) return m.reply('Groups only!');
-                        if (!isOwner) return m.reply('Owner only!');
+                        if (!isAdmin) return m.reply('Admins only!');
                         await sock.groupLeave(from);
                         break;
+                    }
 
                     case 'mute':
                     case 'closegroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
                         
+                        const groupMetaMute = await sock.groupMetadata(from);
+                        const groupAdminsMute = groupMetaMute.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminMute = groupAdminsMute.includes(sender) || isAdmin;
+                        if (!isGroupAdminMute) return m.reply('Admins only!');
+
                         if (!groupSchedules[phoneNumber]) groupSchedules[phoneNumber] = {};
                         if (!groupSchedules[phoneNumber][from]) groupSchedules[phoneNumber][from] = {};
                         
@@ -1363,6 +1531,11 @@ Enjoy using TECHWIZARD!`;
                     case 'opengroup': {
                         if (!m.isGroup) return m.reply('Groups only!');
                         
+                        const groupMetaUnmute = await sock.groupMetadata(from);
+                        const groupAdminsUnmute = groupMetaUnmute.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminUnmute = groupAdminsUnmute.includes(sender) || isAdmin;
+                        if (!isGroupAdminUnmute) return m.reply('Admins only!');
+
                         if (!groupSchedules[phoneNumber]) groupSchedules[phoneNumber] = {};
                         if (!groupSchedules[phoneNumber][from]) groupSchedules[phoneNumber][from] = {};
                         
@@ -1575,22 +1748,34 @@ Enjoy using TECHWIZARD!`;
                         break;
                     }
 
-                    case 'tagall':
+                    case 'tagall': {
                         if (!m.isGroup) return m.reply('This command is for groups only!');
-                        const groupMetadataTag = await sock.groupMetadata(from);
-                        const participantsTag = groupMetadataTag.participants;
+                        
+                        const groupMetaTag = await sock.groupMetadata(from);
+                        const groupAdminsTag = groupMetaTag.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminTag = groupAdminsTag.includes(sender) || isAdmin;
+                        if (!isGroupAdminTag) return m.reply('Admins only!');
+
+                        const participantsTag = groupMetaTag.participants;
                         let tagTextAll = `*TAG ALL*\n\n*Message:* ${text || 'No message'}\n\n`;
                         for (let mem of participantsTag) {
                             tagTextAll += ` @${mem.id.split('@')[0]}\n`;
                         }
                         await m.reply(tagTextAll, from, { mentions: participantsTag.map(a => a.id) });
                         break;
+                    }
 
-                    case 'hidetag':
+                    case 'hidetag': {
                         if (!m.isGroup) return m.reply('This command is for groups only!');
-                        const groupMetadataHide = await sock.groupMetadata(from);
-                        await m.reply(text || '', from, { mentions: groupMetadataHide.participants.map(a => a.id) });
+                        
+                        const groupMetaHide = await sock.groupMetadata(from);
+                        const groupAdminsHide = groupMetaHide.participants.filter(v => v.admin !== null).map(v => v.id);
+                        const isGroupAdminHide = groupAdminsHide.includes(sender) || isAdmin;
+                        if (!isGroupAdminHide) return m.reply('Admins only!');
+
+                        await m.reply(text || '', from, { mentions: groupMetaHide.participants.map(a => a.id) });
                         break;
+                    }
 
                     case 'play':
                         if (!text) return m.reply(`Example: ${prefix}play faded`);
@@ -1967,7 +2152,7 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
     console.log(chalk.green(`Server running on port ${PORT}`));
     
     // Self-ping to prevent Railway/Render/AI Studio from sleeping
@@ -1998,11 +2183,11 @@ app.listen(PORT, '0.0.0.0', () => {
         console.log(chalk.blue(`Found ${sessions.length} sessions, starting bots...`));
         for (const session of sessions) {
             if (fs.existsSync(path.join('sessions', session, 'creds.json'))) {
-                startBot(session);
+                await startBot(session);
             }
         }
     } else {
         // Migration check for single session
-        startBot();
+        await startBot();
     }
 });
