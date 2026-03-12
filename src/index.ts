@@ -94,8 +94,14 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 // Global error handlers to prevent bot from crashing/sleeping
-process.on('uncaughtException', (err) => console.error('Caught exception:', err));
-process.on('unhandledRejection', (reason, p) => console.error('Unhandled Rejection at:', p, 'reason:', reason));
+process.on('uncaughtException', (err) => {
+    console.error('Caught exception:', err);
+    process.exit(1); // Restart process
+});
+process.on('unhandledRejection', (reason, p) => {
+    console.error('Unhandled Rejection at:', p, 'reason:', reason);
+    process.exit(1); // Restart process
+});
 
 const pairingCodes: { [phone: string]: string } = {};
 const pairingStates: { [phone: string]: boolean } = {};
@@ -970,14 +976,14 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'autoreply':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autoreply = true; saveSettings(phoneNumber); m.reply('Autoreply enabled!'); }
                         else if (text === 'off') { settings.autoreply = false; saveSettings(phoneNumber); m.reply('Autoreply disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automated replies.\n*Usage:* ${prefix}autoreply on/off`);
                         break;
 
                     case 'chatbot':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.chatbot = true; saveSettings(phoneNumber); m.reply('Chatbot enabled!'); }
                         else if (text === 'off') { settings.chatbot = false; saveSettings(phoneNumber); m.reply('Chatbot disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles AI chatbot for all messages.\n*Usage:* ${prefix}chatbot on/off`);
@@ -1069,35 +1075,35 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'autoread':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autoread = true; saveSettings(phoneNumber); m.reply('Autoread enabled!'); }
                         else if (text === 'off') { settings.autoread = false; saveSettings(phoneNumber); m.reply('Autoread disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reading of messages.\n*Usage:* ${prefix}autoread on/off`);
                         break;
 
                     case 'autotyping':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autotyping = true; saveSettings(phoneNumber); m.reply('Autotyping enabled!'); }
                         else if (text === 'off') { settings.autotyping = false; saveSettings(phoneNumber); m.reply('Autotyping disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "typing..." status simulation.\n*Usage:* ${prefix}autotyping on/off`);
                         break;
 
                     case 'autorecording':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autorecording = true; saveSettings(phoneNumber); m.reply('Autorecording enabled!'); }
                         else if (text === 'off') { settings.autorecording = false; saveSettings(phoneNumber); m.reply('Autorecording disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles "recording..." status simulation.\n*Usage:* ${prefix}autorecording on/off`);
                         break;
 
                     case 'autoreact':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autoreact = true; saveSettings(phoneNumber); m.reply('Autoreact enabled!'); }
                         else if (text === 'off') { settings.autoreact = false; saveSettings(phoneNumber); m.reply('Autoreact disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles auto-reactions to messages.\n*Usage:* ${prefix}autoreact on/off`);
                         break;
 
                     case 'autoadd': {
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         
                         if (text === 'off') {
                             settings.autoadd = false;
@@ -1199,21 +1205,21 @@ Enjoy using TECHWIZARD!`;
                     }
 
                     case 'autoapprove':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autoapprove = true; saveSettings(phoneNumber); m.reply('Autoapprove enabled! Group join requests will now be automatically approved.'); }
                         else if (text === 'off') { settings.autoapprove = false; saveSettings(phoneNumber); m.reply('Autoapprove disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automatic approval of group join requests.\n*Usage:* ${prefix}autoapprove on/off`);
                         break;
 
                     case 'alwaysonline':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
                         else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
                         break;
 
                     case 'autoviewstatus':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.autoviewstatus = true; saveSettings(phoneNumber); m.reply('Autoview status enabled! Every status will now be automatically viewed.'); }
                         else if (text === 'off') { settings.autoviewstatus = false; saveSettings(phoneNumber); m.reply('Autoview status disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles automatic viewing of status updates.\n*Usage:* ${prefix}autoviewstatus on/off`);
@@ -1299,10 +1305,7 @@ Enjoy using TECHWIZARD!`;
                         
                         try {
                             const groupMeta = await sock.groupMetadata(from);
-                            const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                            const botIsAdmin = groupMeta.participants.find(p => p.id.startsWith(botId.split('@')[0]))?.admin;
-                            if (!botIsAdmin) return m.reply('Bot must be an admin to add members!');
-
+                            
                             const existingParticipants = new Set(groupMeta.participants.map(p => p.id));
                             const toAdd = participantsToAdd.filter(jid => !existingParticipants.has(jid));
                             
@@ -1326,25 +1329,15 @@ Enjoy using TECHWIZARD!`;
                                 const botNum = botNumbers[botIndex];
                                 const botSock = botSocks[botNum];
                                 
-                                // Check if this specific bot is in the group and is admin
-                                const botJid = botNum.includes('@') ? botNum : botNum + '@s.whatsapp.net';
-                                const participant = groupMeta.participants.find(p => p.id.startsWith(botJid.split('@')[0]));
-                                
-                                if (botSock && participant && participant.admin) {
-                                    try {
+                                try {
+                                    if (botSock) {
                                         await botSock.groupParticipantsUpdate(from, [jid], 'add');
-                                        successCount++;
-                                    } catch (e) {
-                                        failCount++;
-                                    }
-                                } else {
-                                    // Fallback to main sock
-                                    try {
+                                    } else {
                                         await sock.groupParticipantsUpdate(from, [jid], 'add');
-                                        successCount++;
-                                    } catch (e) {
-                                        failCount++;
                                     }
+                                    successCount++;
+                                } catch (e) {
+                                    failCount++;
                                 }
                                 
                                 // Random delay to mimic human behavior
@@ -1790,13 +1783,10 @@ Enjoy using TECHWIZARD!`;
                                 caption: `*PLAYING*\n\n*Title:* ${videoPlay.title}\n*Duration:* ${videoPlay.timestamp}\n*Author:* ${videoPlay.author.name}\n*Views:* ${videoPlay.views}\n\nDownloading audio...` 
                             });
 
-                            const ytdl = await import('ytdl-core');
-                            // Use a more robust way to get audio stream
-                            const stream = ytdl.default(videoPlay.url, { 
-                                filter: 'audioonly',
-                                quality: 'highestaudio',
-                                highWaterMark: 1 << 25 
-                            });
+                            const { getInfo, chooseFormat, downloadFromInfo } = await import('ytdl-core');
+                            const info = await getInfo(videoPlay.url);
+                            const format = chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
+                            const stream = downloadFromInfo(info, { format });
                             
                             const chunks: any[] = [];
                             stream.on('data', (chunk) => chunks.push(chunk));
@@ -1820,14 +1810,14 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'antilink':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.antilink = true; saveSettings(phoneNumber); m.reply('Antilink enabled!'); }
                         else if (text === 'off') { settings.antilink = false; saveSettings(phoneNumber); m.reply('Antilink disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles anti-link protection.\n*Usage:* ${prefix}antilink on/off`);
                         break;
 
                     case 'welcome':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.welcome = true; saveSettings(phoneNumber); m.reply('Welcome messages enabled!'); }
                         else if (text === 'off') { settings.welcome = false; saveSettings(phoneNumber); m.reply('Welcome messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group welcome messages.\n*Usage:* ${prefix}welcome on/off`);
@@ -1835,7 +1825,7 @@ Enjoy using TECHWIZARD!`;
 
                     case 'goodbye':
                     case 'left':
-                        if (!isSessionOwner) return m.reply('Only the user of this bot can use that command');
+                        if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
                         if (text === 'on') { settings.goodbye = true; saveSettings(phoneNumber); m.reply('Goodbye messages enabled!'); }
                         else if (text === 'off') { settings.goodbye = false; saveSettings(phoneNumber); m.reply('Goodbye messages disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Toggles group leave messages.\n*Usage:* ${prefix}goodbye on/off`);
@@ -2095,15 +2085,15 @@ function smsg(conn: any, m: any, store: any) {
             ...(options as any).contextInfo,
             isForwarded: true,
             forwardingScore: 999,
-            externalAdReply: {
-                title: "Forwarded from My Group",
-                body: "Join our community",
-                mediaType: 1,
-                thumbnailUrl: "https://picsum.photos/seed/group/200/200",
-                sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla",
-                renderLargerThumbnail: false,
-                showAdAttribution: true
-            }
+            // externalAdReply: {
+            //     title: "Forwarded from My Group",
+            //     body: "Join our community",
+            //     mediaType: 1,
+            //     thumbnailUrl: "https://picsum.photos/seed/group/200/200",
+            //     sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9?mode=hq2tcla",
+            //     renderLargerThumbnail: false,
+            //     showAdAttribution: true
+            // }
         }
     }, { quoted: m });
     m.copy = () => smsg(conn, m, store);
@@ -2171,7 +2161,13 @@ app.listen(PORT, '0.0.0.0', async () => {
             try {
                 const botSet = getSettings(num);
                 if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
-                    await botSocks[num].sendPresenceUpdate('available');
+                    // Check if socket is connected
+                    if (botSocks[num].ws && botSocks[num].ws.readyState === 1) { // 1 = OPEN
+                        await botSocks[num].sendPresenceUpdate('available');
+                    } else {
+                        console.log(`[!] Bot for ${num} seems offline, attempting to reconnect...`);
+                        await startBot(num);
+                    }
                 }
             } catch (e) {}
         }
