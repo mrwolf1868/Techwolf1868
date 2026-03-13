@@ -438,7 +438,7 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
                 console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
                 pairingStates[phoneNumber] = false;
             }
-        }, 2000);
+        }, 5000);
     }
 
     sock.ev.on('creds.update', saveCreds);
