@@ -276,6 +276,11 @@ app.post('/api/pair', async (req, res) => {
     
     const targetNumber = phone.replace(/[^0-9]/g, '');
     
+    // Allow re-pairing if not registered, even if pairingStates is true
+    if (pairingStates[targetNumber] && (!botSocks[targetNumber] || !botSocks[targetNumber].authState?.creds?.registered)) {
+        pairingStates[targetNumber] = false;
+    }
+    
     if (!pairingStates[targetNumber]) {
         // Only stop and delete if the bot is ALREADY registered
         if (botSocks[targetNumber]?.authState?.creds?.registered) {
