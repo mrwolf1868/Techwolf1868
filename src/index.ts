@@ -407,7 +407,7 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        browser: ["Chrome (Linux)", "Chrome", "122.0.6261.111"],
         msgRetryCounterCache: botRetryCache,
         generateHighQualityLinkPreview: true,
         keepAliveIntervalMs: 30000,
