@@ -1213,8 +1213,8 @@ Enjoy using TECHWIZARD!`;
 
                     case 'alwaysonline':
                         if (!isSessionOwner) return m.reply('This command is restricted to the session holder only.');
-                        if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); m.reply('Always online enabled!'); }
-                        else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); m.reply('Always online disabled!'); }
+                        if (text === 'on') { settings.alwaysonline = true; saveSettings(phoneNumber); await sock.sendPresenceUpdate('available'); m.reply('Always online enabled!'); }
+                        else if (text === 'off') { settings.alwaysonline = false; saveSettings(phoneNumber); await sock.sendPresenceUpdate('unavailable'); m.reply('Always online disabled!'); }
                         else m.reply(`*⚠️ INVALID ARGUMENTS*\n\n*Description:* Keeps the bot status as "Online".\n*Usage:* ${prefix}alwaysonline on/off`);
                         break;
 
@@ -1340,8 +1340,8 @@ Enjoy using TECHWIZARD!`;
                                     failCount++;
                                 }
                                 
-                                // Random delay to mimic human behavior
-                                await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 4000) + 3000));
+                                // No delay for immediate adding
+                                await new Promise(resolve => setTimeout(resolve, 0));
                             }
                             
                             m.reply(`*✅ ADDALL COMPLETE*\n\nAdded: ${successCount}\nFailed: ${failCount}`);
@@ -2163,7 +2163,7 @@ app.listen(PORT, '0.0.0.0', async () => {
                 if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
                     // Check if socket is connected
                     if (botSocks[num].ws && botSocks[num].ws.readyState === 1) { // 1 = OPEN
-                        await botSocks[num].sendPresenceUpdate('available');
+                        // Presence update removed to prevent "last active" issues
                     } else {
                         console.log(`[!] Bot for ${num} seems offline, attempting to reconnect...`);
                         await startBot(num);
