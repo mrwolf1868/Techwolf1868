@@ -20,6 +20,9 @@ import axios from 'axios';
 import { fileURLToPath } from 'url';
 import moment from 'moment-timezone';
 import { getAIReply, resetAI, translate } from './ai';
+import * as menuCommands from './commands/menu';
+import * as generalCommands from './commands/general';
+import * as groupCommands from './commands/group';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -412,15 +415,15 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ["Chrome (Linux)", "Chrome", "122.0.6261.111"],
+        browser: ["Chrome", "Chrome", "124.0.6367.207"],
         msgRetryCounterCache: botRetryCache,
         generateHighQualityLinkPreview: true,
         keepAliveIntervalMs: 30000,
         markOnlineOnConnect: true,
         syncFullHistory: false,
         retryRequestDelayMs: 5000,
-        defaultQueryTimeoutMs: 60000,
-        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 120000,
     });
 
     botSocks[phoneNumber] = sock;
@@ -428,22 +431,31 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
 
     // Pairing Code Logic
     if (!sock.authState.creds.registered && phoneNumber) {
-        console.log(chalk.yellow(`[!] Requesting Pairing Code for ${phoneNumber}...`));
-        setTimeout(async () => {
-            try {
-                let code = await sock.requestPairingCode(phoneNumber);
-                pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
-            } catch (err) {
-                console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
-                pairingStates[phoneNumber] = false;
+        console.log(chalk.yellow(`[!] Waiting for connection to be open to request Pairing Code for ${phoneNumber}...`));
+        
+        const waitForOpen = (update: any) => {
+            if (update.connection === 'open') {
+                sock.ev.off('connection.update', waitForOpen);
+                setTimeout(async () => {
+                    try {
+                        let code = await sock.requestPairingCode(phoneNumber);
+                        pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
+                        console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
+                    } catch (err) {
+                        console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
+                        console.log(chalk.red(`Error stack: ${(err as any).stack}`));
+                        pairingStates[phoneNumber] = false;
+                    }
+                }, 2000);
             }
-        }, 5000);
+        };
+        sock.ev.on('connection.update', waitForOpen);
     }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
+        console.log(chalk.blue(`[DEBUG] Connection update: ${JSON.stringify(update)}`));
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -808,176 +820,38 @@ Enjoy using TECHWIZARD!`;
                     case 'menu':
                     case 'help':
                     case 'allmenu': {
-                        const uptime = process.uptime();
-                        const userNumber = sender.split('@')[0];
-                        const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷
-┃ 👤 User: ${userNumber}
-┃ 👑 Owner: @254111967697
-┃ ⏱ Runtime: ${runtime(uptime)}
-┃ ⚡ Status: Online
-┃ 🔣 Prefix: ${prefix}
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👤 GENERAL COMMANDS 〕━━┈⊷
-┃ ${prefix}menu
-┃ ${prefix}allmenu
-┃ ${prefix}ping
-┃ ${prefix}alive
-┃ ${prefix}owner
-┃ ${prefix}runtime
-┃ ${prefix}speed
-┃ ${prefix}id
-┃ ${prefix}deploybot / deploy
-┃ ${prefix}afk
-┃ ${prefix}reminder
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🤖 AI SYSTEM 〕━━┈⊷
-┃ ${prefix}autoreply on/off
-┃ ${prefix}chatbot on/off
-┃ ${prefix}resetai
-┃ ${prefix}ai / ask / chatgpt
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👑 OWNER COMMANDS 〕━━┈⊷
-┃ ${prefix}admin
-┃ ${prefix}addadmin
-┃ ${prefix}removeadmin
-┃ ${prefix}broadcast / bc
-┃ ${prefix}setprefix
-┃ ${prefix}setmenuimage
-┃ ${prefix}shutdown
-┃ ${prefix}userjoin
-┃ ${prefix}join / autojoin
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 ⚙️ AUTO SYSTEM 〕━━┈⊷
-┃ ${prefix}autoread on/off
-┃ ${prefix}autotyping on/off
-┃ ${prefix}autorecording on/off
-┃ ${prefix}autoreact on/off
-┃ ${prefix}autoadd on/off
-┃ ${prefix}alwaysonline on/off
-┃ ${prefix}autoviewstatus on/off
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👥 GROUP COMMANDS 〕━━┈⊷
-┃ ${prefix}add
-┃ ${prefix}kick
-┃ ${prefix}promote
-┃ ${prefix}demote
-┃ ${prefix}tagall
-┃ ${prefix}hidetag
-┃ ${prefix}addall
-┃ ${prefix}stopadd
-┃ ${prefix}linkgc
-┃ ${prefix}leave
-┃ ${prefix}mute / closegroup
-┃ ${prefix}unmute / opengroup
-┃ ${prefix}welcome on/off
-┃ ${prefix}goodbye on/off
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🛡 PROTECTION COMMANDS 〕━━┈⊷
-┃ ${prefix}antilink on/off
-┃ ${prefix}antispam on/off
-┃ ${prefix}antimention on/off
-┃ ${prefix}antitag on/off
-┃ ${prefix}warn
-┃ ${prefix}block
-┃ ${prefix}unblock
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🧰 TOOL COMMANDS 〕━━┈⊷
-┃ ${prefix}translate
-┃ ${prefix}calc
-┃ ${prefix}tts
-┃ ${prefix}shorturl
-┃ ${prefix}qr
-┃ ${prefix}readqr
-┃ ${prefix}vv / viewonce
-┃ ${prefix}sticker / s
-┃ ${prefix}toimg
-┃ ${prefix}play
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
-┃ ${prefix}vcf
-┃ ${prefix}add (reply vcf)
-╰━━━━━━━━━━━━━━━┈⊷
-
-╰━❮ ${BOT_NAME} SYSTEM ACTIVE ❯━╯`;
-                        await m.reply(menuText, from, { mentions: ['254111967697@s.whatsapp.net'] });
+                        await menuCommands.menu(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
                     }
 
                     case 'speed':
                     case 'ping': {
-                        const start = Date.now();
-                        await m.reply('Pinging...');
-                        const end = Date.now();
-                        await m.reply(`Pong! Speed: ${end - start}ms`);
+                        await generalCommands.speed(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
                     }
 
                     case 'alive':
-                        m.reply(`*I am alive!* ⚡\n\n*Runtime:* ${runtime(process.uptime())}\n*Bot Name:* ${BOT_NAME}`);
+                        await generalCommands.alive(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'owner':
-                        const vcard = 'BEGIN:VCARD\n' // metadata of the contact card
-                            + 'VERSION:3.0\n' 
-                            + 'FN:TechWizard Owner\n' // full name
-                            + 'ORG:TechWizard;\n' // the organization of the contact
-                            + 'TEL;type=CELL;type=VOICE;waid=254111967697:+254 111 967 697\n' // WhatsApp ID + phone number
-                            + 'END:VCARD';
-                        await m.reply('', from, { 
-                            contacts: { 
-                                displayName: 'TechWizard Owner', 
-                                contacts: [{ vcard }] 
-                            }
-                        });
+                        await generalCommands.owner(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'runtime':
-                        m.reply(`*System Runtime:* ${runtime(process.uptime())}`);
+                        await generalCommands.runtimeCmd(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'id':
-                        m.reply(from);
+                        await generalCommands.id(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'afk':
-                        if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Sets your status to Away From Keyboard.\n*Usage:* ${prefix}afk <reason>\n*Example:* ${prefix}afk Sleeping`);
-                        m.reply(`You are now AFK: ${text}`);
+                        await generalCommands.afk(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'reminder':
-                        if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Sets a quick reminder.\n*Usage:* ${prefix}reminder <time>|<message>\n*Example:* ${prefix}reminder 10s|Check the door`);
-                        const [timeRem, ...remTextParts] = text.split('|');
-                        const remMessage = remTextParts.join('|');
-                        if (!remMessage) return m.reply('Please provide a message for the reminder.');
-                        
-                        let delayMs = 0;
-                        const timeMatch = timeRem.toLowerCase().match(/(\d+)(s|m|h|d)/);
-                        if (timeMatch) {
-                            const val = parseInt(timeMatch[1]);
-                            const unit = timeMatch[2];
-                            if (unit === 's') delayMs = val * 1000;
-                            else if (unit === 'm') delayMs = val * 60 * 1000;
-                            else if (unit === 'h') delayMs = val * 60 * 60 * 1000;
-                            else if (unit === 'd') delayMs = val * 24 * 60 * 60 * 1000;
-                        } else {
-                            delayMs = parseInt(timeRem) * 1000; // Default to seconds if just a number
-                        }
-
-                        if (isNaN(delayMs) || delayMs <= 0) return m.reply('Invalid time format! Use e.g. 10s, 5m, 1h');
-                        if (delayMs > 24 * 60 * 60 * 1000 * 7) return m.reply('Reminder cannot be set for more than 7 days.');
-
-                        m.reply(`Reminder set for ${timeRem}! I will notify you then.`);
-                        setTimeout(() => {
-                            m.reply(`⏰ *REMINDER:* ${remMessage}`);
-                        }, delayMs);
+                        await generalCommands.reminder(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'autoreply':
@@ -1243,21 +1117,7 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'add':
-                        if (!m.isGroup) return m.reply('Groups only!');
-                        if (!text) return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Adds a member to the group.\n*Usage:* ${prefix}add <number>\n*Example:* ${prefix}add 254700000000`);
-                        
-                        try {
-                            const groupMetaAdd = await sock.groupMetadata(from);
-                            const botIdAdd = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                            const botIsAdminAdd = groupMetaAdd.participants.find(p => p.id === botIdAdd)?.admin;
-                            if (!botIsAdminAdd) return m.reply('Bot must be an admin to add members!');
-
-                            const addJid = text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                            await sock.groupParticipantsUpdate(from, [addJid], 'add');
-                            m.reply('Added!');
-                        } catch (e) {
-                            m.reply('Failed to add. They might have privacy settings or I might be rate-limited.');
-                        }
+                        await groupCommands.add(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
                         break;
 
                     case 'addall': {
@@ -1384,65 +1244,17 @@ Enjoy using TECHWIZARD!`;
                         }
                         break;
 
-                    case 'kick': {
-                        if (!m.isGroup) return m.reply('Groups only!');
-                        
-                        const groupMetaKick = await sock.groupMetadata(from);
-                        const groupAdminsKick = groupMetaKick.participants.filter(v => v.admin !== null).map(v => v.id);
-                        const isGroupAdminKick = groupAdminsKick.includes(sender) || isAdmin;
-                        if (!isGroupAdminKick) return m.reply('Admins only!');
-
-                        const botIdKick = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const botIsAdminKick = groupMetaKick.participants.find(p => p.id === botIdKick)?.admin;
-                        if (!botIsAdminKick) return m.reply('Bot must be an admin to kick members!');
-
-                        const kickJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        if (!kickJid || kickJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Kicks a member from the group.\n*Usage:* ${prefix}kick <tag/reply/number>`);
-                        
-                        await sock.groupParticipantsUpdate(from, [kickJid], 'remove');
-                        m.reply('Kicked!');
+                    case 'kick':
+                        await groupCommands.kick(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
                         break;
-                    }
 
-                    case 'promote': {
-                        if (!m.isGroup) return m.reply('Groups only!');
-                        
-                        const groupMetaProm = await sock.groupMetadata(from);
-                        const groupAdminsProm = groupMetaProm.participants.filter(v => v.admin !== null).map(v => v.id);
-                        const isGroupAdminProm = groupAdminsProm.includes(sender) || isAdmin;
-                        if (!isGroupAdminProm) return m.reply('Admins only!');
-
-                        const botIdProm = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const botIsAdminProm = groupMetaProm.participants.find(p => p.id === botIdProm)?.admin;
-                        if (!botIsAdminProm) return m.reply('Bot must be an admin to promote members!');
-
-                        const promJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        if (!promJid || promJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Promotes a member to group admin.\n*Usage:* ${prefix}promote <tag/reply/number>`);
-                        
-                        await sock.groupParticipantsUpdate(from, [promJid], 'promote');
-                        m.reply('Promoted!');
+                    case 'promote':
+                        await groupCommands.promote(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
                         break;
-                    }
 
-                    case 'demote': {
-                        if (!m.isGroup) return m.reply('Groups only!');
-                        
-                        const groupMetaDem = await sock.groupMetadata(from);
-                        const groupAdminsDem = groupMetaDem.participants.filter(v => v.admin !== null).map(v => v.id);
-                        const isGroupAdminDem = groupAdminsDem.includes(sender) || isAdmin;
-                        if (!isGroupAdminDem) return m.reply('Admins only!');
-
-                        const botIdDem = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                        const botIsAdminDem = groupMetaDem.participants.find(p => p.id === botIdDem)?.admin;
-                        if (!botIsAdminDem) return m.reply('Bot must be an admin to demote members!');
-
-                        const demJid = m.mentionedJid[0] ? m.mentionedJid[0] : m.quoted ? m.quoted.sender : text.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
-                        if (!demJid || demJid === '@s.whatsapp.net') return m.reply(`*⚠️ MISSING ARGUMENTS*\n\n*Description:* Demotes a group admin to member.\n*Usage:* ${prefix}demote <tag/reply/number>`);
-                        
-                        await sock.groupParticipantsUpdate(from, [demJid], 'demote');
-                        m.reply('Demoted!');
+                    case 'demote':
+                        await groupCommands.demote(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
                         break;
-                    }
 
                     case 'linkgc': {
                         if (!m.isGroup) return m.reply('Groups only!');
