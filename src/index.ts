@@ -106,6 +106,19 @@ process.on('unhandledRejection', (reason, p) => {
     process.exit(1); // Restart process
 });
 
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+    console.log('SIGTERM received, shutting down gracefully...');
+    for (const phone in botSocks) {
+        try {
+            await botSocks[phone].end(undefined);
+        } catch (e) {
+            console.log(`Error closing socket for ${phone}:`, e);
+        }
+    }
+    process.exit(0);
+});
+
 const pairingCodes: { [phone: string]: string } = {};
 const pairingStates: { [phone: string]: boolean } = {};
 const botSocks: { [phone: string]: any } = {};
@@ -755,6 +768,18 @@ Enjoy using TECHWIZARD!`;
             const isAdmin = settings.admins.includes(senderNumber) || isSessionOwner;
 
             console.log(`[DEBUG] isCmd=${isCmd}, command=${command}, sender=${sender}`);
+
+            if (isCmd) {
+                try {
+                    // Command execution logic
+                    switch (command) {
+                        // ... existing cases ...
+                    }
+                } catch (e) {
+                    console.log(chalk.red(`Error in command ${command}:`, e));
+                    m.reply("An error occurred while executing this command.");
+                }
+            }
 
             // Typing/Recording simulation
             if (settings.autotyping) await sock.sendPresenceUpdate('composing', from);
