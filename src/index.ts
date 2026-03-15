@@ -1220,6 +1220,7 @@ Enjoy using TECHWIZARD!`;
                                     }
                                     successCount++;
                                 } catch (e) {
+                                    console.log(`[ERROR] Failed to add ${jid} using bot ${botSock ? 'botSock' : 'sock'}:`, e);
                                     failCount++;
                                 }
                                 
