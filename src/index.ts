@@ -1593,7 +1593,7 @@ Enjoy using TECHWIZARD!`;
                                 caption: `*PLAYING*\n\n*Title:* ${videoPlay.title}\n*Duration:* ${videoPlay.timestamp}\n*Author:* ${videoPlay.author.name}\n*Views:* ${videoPlay.views}\n\nDownloading audio...` 
                             });
 
-                            const { getInfo, chooseFormat, downloadFromInfo } = await import('ytdl-core');
+                            const { getInfo, chooseFormat, downloadFromInfo } = await import('@distube/ytdl-core');
                             const info = await getInfo(videoPlay.url);
                             const format = chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
                             const stream = downloadFromInfo(info, { format });
