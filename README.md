@@ -47,3 +47,5 @@ This bot is ready for deployment on:
 - **VPS**
 
 Ensure you have `ffmpeg` installed on your server for media processing.
+
+**IMPORTANT:** If you are hosting on a platform like Railway, make sure to configure a **Persistent Volume** for the `sessions` folder so that your bot doesn't need to re-pair every time it restarts.

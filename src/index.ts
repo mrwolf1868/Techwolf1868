@@ -415,7 +415,7 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
         },
-        browser: ["Chrome", "Chrome", "124.0.6367.207"],
+        browser: ["Mac OS", "Chrome", "124.0.6367.207"],
         msgRetryCounterCache: botRetryCache,
         generateHighQualityLinkPreview: true,
         keepAliveIntervalMs: 30000,
@@ -431,25 +431,18 @@ async function startBot(phoneNumber?: string, isNewPairing = false) {
 
     // Pairing Code Logic
     if (!sock.authState.creds.registered && phoneNumber) {
-        console.log(chalk.yellow(`[!] Waiting for connection to be open to request Pairing Code for ${phoneNumber}...`));
-        
-        const waitForOpen = (update: any) => {
-            if (update.connection === 'open') {
-                sock.ev.off('connection.update', waitForOpen);
-                setTimeout(async () => {
-                    try {
-                        let code = await sock.requestPairingCode(phoneNumber);
-                        pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
-                        console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
-                    } catch (err) {
-                        console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
-                        console.log(chalk.red(`Error stack: ${(err as any).stack}`));
-                        pairingStates[phoneNumber] = false;
-                    }
-                }, 2000);
+        console.log(chalk.yellow(`[!] Requesting Pairing Code for ${phoneNumber}...`));
+        setTimeout(async () => {
+            try {
+                let code = await sock.requestPairingCode(phoneNumber);
+                pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
+                console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
+            } catch (err) {
+                console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
+                console.log(chalk.red(`Error stack: ${(err as any).stack}`));
+                pairingStates[phoneNumber] = false;
             }
-        };
-        sock.ev.on('connection.update', waitForOpen);
+        }, 5000);
     }
 
     sock.ev.on('creds.update', saveCreds);
