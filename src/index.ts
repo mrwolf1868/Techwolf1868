@@ -27,16 +27,78 @@ import * as groupCommands from './commands/group';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+
+function getBaseUrl() {
+    if (process.env.BASE_URL) return process.env.BASE_URL;
+    if (process.env.KATABUMP_URL) return process.env.KATABUMP_URL;
+    if (process.env.APP_URL) return process.env.APP_URL;
+    if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL;
+    if (process.env.RAILWAY_STATIC_URL) return `https://${process.env.RAILWAY_STATIC_URL}`;
+    return `http://localhost:${PORT}`;
+}
+
 // Load environment variables
-const OWNER_NUMBER = process.env.OWNER_NUMBER || '254700000000';
+const OWNER_NUMBER = process.env.OWNER_NUMBER || '254111967697';
 const BOT_NAME = process.env.BOT_NAME || 'TECHWIZARD';
 let PREFIX = process.env.PREFIX || '.';
+const SERVER_ID = process.env.SERVER_ID || '';
+const CONTROL_LINK = process.env.CONTROL_LINK || getBaseUrl();
+
+// Log Buffer for Dashboard
+const logBuffer: string[] = [];
+const MAX_LOGS = 50;
+
+function addLog(msg: string, type: 'system' | 'network' | 'error' | 'user' = 'system') {
+    const timestamp = moment().format('HH:mm:ss');
+    let formattedMsg = '';
+    
+    switch(type) {
+        case 'system': formattedMsg = `<p class="text-green-500">[SYSTEM] <span class="text-gray-400">${msg}</span></p>`; break;
+        case 'network': formattedMsg = `<p class="text-blue-500">[NETWORK] <span class="text-gray-400">${msg}</span></p>`; break;
+        case 'error': formattedMsg = `<p class="text-red-500">[ERROR] <span class="text-white">${msg}</span></p>`; break;
+        case 'user': formattedMsg = `<p class="text-yellow-500">container@katabump~ <span class="text-white">${msg}</span></p>`; break;
+    }
+    
+    logBuffer.push(formattedMsg);
+    if (logBuffer.length > MAX_LOGS) logBuffer.shift();
+}
+
+// Override console.log to capture logs
+const originalLog = console.log;
+const originalError = console.error;
+
+console.log = (...args) => {
+    originalLog(...args);
+    addLog(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '), 'system');
+};
+
+console.error = (...args) => {
+    originalError(...args);
+    addLog(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '), 'error');
+};
+
+// Utility to get directory size
+function getDirSize(dirPath: string): number {
+    let size = 0;
+    try {
+        const files = fs.readdirSync(dirPath);
+        for (const file of files) {
+            const filePath = path.join(dirPath, file);
+            const stats = fs.statSync(filePath);
+            if (stats.isDirectory()) size += getDirSize(filePath);
+            else size += stats.size;
+        }
+    } catch (e) {}
+    return size;
+}
 
 // Bot Settings State
 const botSettings: { [phone: string]: any } = {};
 
-function getSettings(phone: string) {
-    if (botSettings[phone]) return botSettings[phone];
+function getSettings(phoneNumber: string) {
+    if (botSettings[phoneNumber]) return botSettings[phoneNumber];
     
     const defaultSettings = {
         autoreply: false,
@@ -59,26 +121,26 @@ function getSettings(phone: string) {
         admins: [OWNER_NUMBER.split('@')[0]]
     };
 
-    const settingsFile = `./sessions/${phone}/settings.json`;
+    const settingsFile = `./sessions/${phoneNumber}/settings.json`;
     if (fs.existsSync(settingsFile)) {
         try {
             const saved = fs.readJsonSync(settingsFile);
-            botSettings[phone] = { ...defaultSettings, ...saved };
-            return botSettings[phone];
+            botSettings[phoneNumber] = { ...defaultSettings, ...saved };
+            return botSettings[phoneNumber];
         } catch (e) {}
     }
     
-    botSettings[phone] = defaultSettings;
+    botSettings[phoneNumber] = defaultSettings;
     return defaultSettings;
 }
 
-function saveSettings(phone: string) {
+function saveSettings(phoneNumber: string) {
     try {
-        const settingsFile = `./sessions/${phone}/settings.json`;
+        const settingsFile = `./sessions/${phoneNumber}/settings.json`;
         fs.ensureDirSync(path.dirname(settingsFile));
-        fs.writeJsonSync(settingsFile, botSettings[phone], { spaces: 4 });
+        fs.writeJsonSync(settingsFile, botSettings[phoneNumber], { spaces: 4 });
     } catch (e) {
-        console.log(chalk.red(`Error saving settings for ${phone}:`, e));
+        console.log(chalk.red(`Error saving settings for ${phoneNumber}:`, e));
     }
 }
 
@@ -93,9 +155,6 @@ const store = {
     loadMessage: async (chat: string, id: string, conn: any) => null
 };
 
-const app = express();
-const PORT = Number(process.env.PORT) || 3000;
-
 // Global error handlers to prevent bot from crashing/sleeping
 process.on('uncaughtException', (err) => {
     console.error('Caught exception:', err);
@@ -109,11 +168,11 @@ process.on('unhandledRejection', (reason, p) => {
 // Graceful shutdown
 process.on('SIGTERM', async () => {
     console.log('SIGTERM received, shutting down gracefully...');
-    for (const phone in botSocks) {
+    for (const num in botSocks) {
         try {
-            await botSocks[phone].end(undefined);
+            await botSocks[num].end(undefined);
         } catch (e) {
-            console.log(`Error closing socket for ${phone}:`, e);
+            console.log(`Error closing socket for ${num}:`, e);
         }
     }
     process.exit(0);
@@ -121,8 +180,8 @@ process.on('SIGTERM', async () => {
 
 const pairingCodes: { [phone: string]: string } = {};
 const pairingStates: { [phone: string]: boolean } = {};
+const connectingStates: { [phone: string]: boolean } = {};
 const botSocks: { [phone: string]: any } = {};
-let onlineInterval: any = null;
 const ignoredMessageIds = new Set<string>();
 const massAddingGroups = new Set<string>();
 const viewOnceCache = new Map<string, { data: Buffer, mimetype: string }>();
@@ -135,47 +194,45 @@ app.post('/connect', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
 
-    const targetNumber = phoneNumber.replace(/[^0-9]/g, '');
+    const num = phoneNumber.replace(/[^0-9]/g, '');
     
-    if (!pairingStates[targetNumber]) {
+    if (!pairingStates[num]) {
         // Only stop and delete if the bot is ALREADY registered
-        if (botSocks[targetNumber]?.authState?.creds?.registered) {
-            if (botSocks[targetNumber]) {
-                try {
-                    botSocks[targetNumber].ev.removeAllListeners();
-                    botSocks[targetNumber].end(undefined);
-                    delete botSocks[targetNumber];
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                } catch (e) {}
-            }
+        if (botSocks[num]?.authState?.creds?.registered) {
+            try {
+                botSocks[num].ev.removeAllListeners();
+                botSocks[num].end(undefined);
+                delete botSocks[num];
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (e) {}
 
             // Clear session for fresh pairing
-            const sessionPath = path.join('sessions', targetNumber);
+            const sessionPath = path.join('sessions', num);
             if (fs.existsSync(sessionPath)) {
                 try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
             }
         }
 
-        pairingCodes[targetNumber] = "";
-        pairingStates[targetNumber] = true;
+        pairingCodes[num] = "";
+        pairingStates[num] = true;
         (async () => {
             try {
-                await startBot(targetNumber, true);
+                await startBot(num, true);
             } catch (err) {
-                console.log('Pairing error:', err);
-                pairingStates[targetNumber] = false;
+                console.log(`Pairing error for ${num}:`, err);
+                pairingStates[num] = false;
             }
         })();
     }
 
     let retries = 0;
     const checkCode = setInterval(() => {
-        if (pairingCodes[targetNumber]) {
+        if (pairingCodes[num]) {
             clearInterval(checkCode);
-            res.json({ code: pairingCodes[targetNumber] });
+            res.json({ code: pairingCodes[num] });
         } else if (retries > 60) {
             clearInterval(checkCode);
-            pairingStates[targetNumber] = false;
+            pairingStates[num] = false;
             res.status(500).json({ error: 'Failed to generate pairing code' });
         }
         retries++;
@@ -190,36 +247,48 @@ app.get('/', async (req, res) => {
     const numberParam = req.query.number as string;
     
     if (numberParam) {
-        const targetNumber = numberParam.replace(/[^0-9]/g, '');
-        if (!targetNumber) return res.status(400).send('Invalid number');
+        const num = numberParam.replace(/[^0-9]/g, '');
+        if (!num) return res.status(400).send('Invalid number');
 
-        if (!pairingStates[targetNumber]) {
-            // Only stop and delete if the bot is ALREADY registered
-            if (botSocks[targetNumber]?.authState?.creds?.registered) {
-                if (botSocks[targetNumber]) {
-                    try {
-                        botSocks[targetNumber].ev.removeAllListeners();
-                        botSocks[targetNumber].end(undefined);
-                        delete botSocks[targetNumber];
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                    } catch (e) {}
-                }
+        // Check if ALREADY connected - if so, don't restart pairing!
+        const isRegistered = botSocks[num]?.authState?.creds?.registered;
+        if (isRegistered && !req.query.force) {
+            return res.send(`
+                <div style="font-family: sans-serif; text-align: center; margin-top: 50px; background: #1a1a2e; color: white; padding: 20px; border-radius: 10px;">
+                    <h2 style="color: #22c55e;">✅ Already Connected</h2>
+                    <p>The bot for +${num} is already active.</p>
+                    <a href="/" style="color: #6366f1; text-decoration: none;">Go to Dashboard</a>
+                    <br><br>
+                    <p style="font-size: 12px; color: #666;">To force a new pairing, use ?number=${num}&force=true</p>
+                </div>
+            `);
+        }
+
+        if (!pairingStates[num]) {
+            // Only stop and delete if the bot is ALREADY registered or force is true
+            if (isRegistered) {
+                try {
+                    botSocks[num].ev.removeAllListeners();
+                    botSocks[num].end(undefined);
+                    delete botSocks[num];
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (e) {}
 
                 // Clear session for fresh pairing
-                const sessionPath = path.join('sessions', targetNumber);
+                const sessionPath = path.join('sessions', num);
                 if (fs.existsSync(sessionPath)) {
                     try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
                 }
             }
 
-            pairingCodes[targetNumber] = "";
-            pairingStates[targetNumber] = true;
+            pairingCodes[num] = "";
+            pairingStates[num] = true;
             (async () => {
                 try {
-                    await startBot(targetNumber, true);
+                    await startBot(num, true);
                 } catch (err) {
-                    console.log('Pairing error:', err);
-                    pairingStates[targetNumber] = false;
+                    console.log(`Pairing error for ${num}:`, err);
+                    pairingStates[num] = false;
                 }
             })();
         }
@@ -227,59 +296,208 @@ app.get('/', async (req, res) => {
         (async () => {
             let retries = 0;
             const checkCode = setInterval(() => {
-                if (pairingCodes[targetNumber]) {
+                if (pairingCodes[num]) {
                     clearInterval(checkCode);
-                    res.send(pairingCodes[targetNumber]);
+                    res.send(pairingCodes[num]);
                 } else if (retries > 60) {
                     clearInterval(checkCode);
-                    pairingStates[targetNumber] = false;
+                    pairingStates[num] = false;
                     res.status(500).send('Timeout generating code');
                 }
                 retries++;
             }, 1000);
         })();
     } else {
-        const activeSessions = Object.keys(botSocks).filter(num => botSocks[num]?.authState?.creds?.registered);
-        const isConnected = activeSessions.length > 0;
+        const botNumbers = Object.keys(botSocks);
+        let botStatusHtml = '';
+        const isAnyBotConnected = botNumbers.some(num => botSocks[num]?.authState?.creds?.registered);
+        
+        if (botNumbers.length === 0) {
+            botStatusHtml = '<p class="text-gray-400 italic">No active sessions found</p>';
+        } else {
+            botNumbers.forEach(num => {
+                const isConnected = botSocks[num]?.authState?.creds?.registered || false;
+                botStatusHtml += `
+                    <div class="flex justify-between items-center p-3 bg-[#252545] rounded-lg border border-white/5 mb-2">
+                        <div class="flex items-center gap-3">
+                            <div class="w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'}"></div>
+                            <span class="text-sm font-medium text-gray-200">+${num}</span>
+                        </div>
+                        <span class="text-[10px] px-2 py-0.5 rounded bg-black/30 text-gray-400 uppercase tracking-wider">
+                            ${isConnected ? 'Online' : 'Offline'}
+                        </span>
+                    </div>
+                `;
+            });
+        }
+
+        const memUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
+        const totalMem = (process.memoryUsage().heapTotal / 1024 / 1024).toFixed(0);
+        
+        // Real Disk Usage
+        const sessionSize = (getDirSize('./sessions') / 1024 / 1024).toFixed(1);
+        const appSize = (getDirSize('.') / 1024 / 1024).toFixed(1);
+        
+        // CPU Usage (Approximate)
+        const cpuUsage = (process.cpuUsage().user / 1000000).toFixed(1);
+
         res.send(`
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>${BOT_NAME} Status</title>
+                <title>${BOT_NAME} Dashboard</title>
                 <script src="https://cdn.tailwindcss.com"></script>
+                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
                 <style>
-                    body { background: #050505; color: #00ff00; font-family: 'Courier New', Courier, monospace; }
-                    .neon-border { border: 1px solid #00ff00; box-shadow: 0 0 15px rgba(0, 255, 0, 0.3); }
-                    .neon-text { text-shadow: 0 0 5px #00ff00; }
+                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+                    body { 
+                        background-color: #1a1a2e; 
+                        color: #e2e8f0; 
+                        font-family: 'Inter', sans-serif;
+                    }
+                    .katabump-card {
+                        background: #252545;
+                        border: 1px solid rgba(255, 255, 255, 0.05);
+                    }
+                    .terminal-font {
+                        font-family: 'Fira Code', monospace;
+                    }
+                    ::-webkit-scrollbar { width: 4px; }
+                    ::-webkit-scrollbar-track { background: transparent; }
+                    ::-webkit-scrollbar-thumb { background: #3b3b5e; border-radius: 10px; }
                 </style>
             </head>
-            <body class="min-h-screen flex items-center justify-center p-4">
-                <div class="max-w-md w-full p-8 rounded-xl neon-border bg-black/50 backdrop-blur-sm text-center space-y-6">
-                    <h1 class="text-3xl font-bold neon-text tracking-widest uppercase">${BOT_NAME}</h1>
-                    <div class="py-4 border-y border-green-500/30">
-                        <p class="text-sm uppercase tracking-widest opacity-70">System Status</p>
-                        <p class="text-2xl font-bold ${isConnected ? 'text-green-400' : 'text-red-500'}">
-                            ${isConnected ? '● ' + activeSessions.length + ' ACTIVE' : '○ OFFLINE'}
-                        </p>
-                        ${activeSessions.length > 0 ? `
-                            <div class="mt-2 text-xs text-green-400/60">
-                                ${activeSessions.map(num => `<div>+${num}</div>`).join('')}
+            <body class="min-h-screen bg-[#1a1a2e] p-4 md:p-8">
+                <div class="max-w-2xl mx-auto space-y-6">
+                    <!-- Header -->
+                    <div class="flex items-center justify-between katabump-card p-4 rounded-xl">
+                        <div class="flex items-center gap-3">
+                            <div class="bg-indigo-600 p-2 rounded-lg">
+                                <i class="fas fa-rocket text-white"></i>
                             </div>
-                        ` : ''}
+                            <div>
+                                <h1 class="text-xl font-bold tracking-tight">${SERVER_ID || 'TECHWIZARD-NODE'}</h1>
+                                <p class="text-[10px] text-gray-400 uppercase tracking-widest">Server Management</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-3 py-1 rounded-full bg-green-900/30 text-green-400 text-xs font-medium border border-green-500/20">
+                                ${isAnyBotConnected ? 'Online' : 'Standby'}
+                            </span>
+                        </div>
                     </div>
-                    <div class="space-y-2">
-                        <p class="text-xs opacity-50 uppercase tracking-widest">Pairing Protocol</p>
-                        <p class="text-sm text-green-400/80">
-                            To initiate pairing, append your number to the URL:<br>
-                            <code class="bg-green-900/30 px-2 py-1 rounded mt-2 inline-block text-white">/?number=2547XXXXXXXX</code>
-                        </p>
+
+                    <!-- Control Buttons -->
+                    <div class="grid grid-cols-3 gap-3">
+                        <button onclick="location.reload()" class="bg-green-600 hover:bg-green-700 p-3 rounded-lg flex items-center justify-center transition-all shadow-lg shadow-green-900/20">
+                            <i class="fas fa-play text-white"></i>
+                        </button>
+                        <button onclick="fetch('/api/restart', {method:'POST'}).then(()=>setTimeout(()=>location.reload(),2000)).catch(()=>{})" class="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg flex items-center justify-center transition-all">
+                            <i class="fas fa-sync-alt text-white"></i>
+                        </button>
+                        <button onclick="if(confirm('Stop all bots?')) fetch('/api/stop', {method:'POST'}).then(()=>location.reload()).catch(()=>{})" class="bg-red-600 hover:bg-red-700 p-3 rounded-lg flex items-center justify-center transition-all shadow-lg shadow-red-900/20">
+                            <i class="fas fa-stop text-white"></i>
+                        </button>
                     </div>
-                    <div class="pt-4">
-                        <p class="text-[10px] opacity-30 uppercase tracking-widest">Runtime: ${process.uptime().toFixed(0)}s</p>
+
+                    <!-- Stats Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="katabump-card p-4 rounded-xl flex items-center justify-between">
+                            <div>
+                                <p class="text-[10px] text-gray-400 uppercase tracking-widest mb-1">CPU Load</p>
+                                <p class="text-lg font-semibold">${cpuUsage}%</p>
+                            </div>
+                            <div class="bg-orange-500/10 p-3 rounded-xl">
+                                <i class="fas fa-microchip text-orange-500 text-xl"></i>
+                            </div>
+                        </div>
+                        <div class="katabump-card p-4 rounded-xl flex items-center justify-between">
+                            <div>
+                                <p class="text-[10px] text-gray-400 uppercase tracking-widest mb-1">Memory</p>
+                                <p class="text-lg font-semibold">${memUsage}MB / ${totalMem}MB</p>
+                            </div>
+                            <div class="bg-orange-500/10 p-3 rounded-xl">
+                                <i class="fas fa-memory text-orange-500 text-xl"></i>
+                            </div>
+                        </div>
+                        <div class="katabump-card p-4 rounded-xl flex items-center justify-between">
+                            <div>
+                                <p class="text-[10px] text-gray-400 uppercase tracking-widest mb-1">Disk (Sessions)</p>
+                                <p class="text-lg font-semibold">${sessionSize}MB / ${appSize}MB</p>
+                            </div>
+                            <div class="bg-orange-500/10 p-3 rounded-xl">
+                                <i class="fas fa-hard-drive text-orange-500 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active Sessions -->
+                    <div class="katabump-card rounded-xl overflow-hidden">
+                        <div class="p-4 border-b border-white/5 flex justify-between items-center bg-black/10">
+                            <h2 class="text-xs font-bold uppercase tracking-widest text-gray-400">Active Sessions</h2>
+                            <button onclick="const n=prompt('Enter number:'); if(n) location.href='/?number='+n" class="text-[10px] text-indigo-400 hover:underline">Add New</button>
+                        </div>
+                        <div class="p-4">
+                            ${botStatusHtml}
+                        </div>
+                    </div>
+
+                    <!-- Console -->
+                    <div class="bg-black rounded-xl overflow-hidden border border-white/5 shadow-2xl">
+                        <div class="bg-[#1a1a2e] px-4 py-2 border-b border-white/5 flex justify-between items-center">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                                <div class="w-2 h-2 rounded-full bg-yellow-500"></div>
+                                <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                                <span class="text-[10px] text-gray-500 ml-2 terminal-font">console@katabump:~</span>
+                            </div>
+                            <button onclick="location.reload()" class="text-[10px] text-gray-600 hover:text-gray-400"><i class="fas fa-sync"></i></button>
+                        </div>
+                        <div id="console-output" class="p-4 h-48 overflow-y-auto terminal-font text-xs space-y-1">
+                            ${logBuffer.join('')}
+                            <p class="text-gray-600 animate-pulse">_</p>
+                        </div>
+                    </div>
+
+                    <!-- Footer -->
+                    <div class="text-center">
+                        <p class="text-[10px] text-gray-500 uppercase tracking-[0.2em]">© 2026 Katabump • All rights reserved</p>
                     </div>
                 </div>
+                <script>
+                    const consoleOutput = document.getElementById('console-output');
+                    const consoleHeader = document.querySelector('.terminal-font.text-gray-500');
+                    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                    
+                    let fetchErrorCount = 0;
+                    
+                    // Auto-refresh logs every 10 seconds
+                    setInterval(() => {
+                        if (document.hidden) return;
+                        
+                        fetch('/api/logs')
+                            .then(r => {
+                                if (!r.ok) throw new Error('Server response error');
+                                return r.json();
+                            })
+                            .then(logs => {
+                                fetchErrorCount = 0;
+                                if (consoleHeader) consoleHeader.innerText = 'console@katabump:~';
+                                if (Array.isArray(logs)) {
+                                    consoleOutput.innerHTML = logs.join('') + '<p class="text-gray-600 animate-pulse">_</p>';
+                                    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                                }
+                            })
+                            .catch(err => {
+                                fetchErrorCount++;
+                                // Show reconnecting status immediately on first error
+                                if (consoleHeader) consoleHeader.innerText = 'console@katabump:~ (reconnecting...)';
+                                // Silent error to avoid console clutter
+                            });
+                    }, 10000);
+                </script>
             </body>
             </html>
         `);
@@ -290,345 +508,267 @@ app.post('/api/pair', async (req, res) => {
     const { phone } = req.body;
     if (!phone) return res.json({ status: 'error', message: 'Phone number required' });
     
-    const targetNumber = phone.replace(/[^0-9]/g, '');
+    const num = phone.replace(/[^0-9]/g, '');
     
-    // Allow re-pairing if not registered, even if pairingStates is true
-    if (pairingStates[targetNumber] && (!botSocks[targetNumber] || !botSocks[targetNumber].authState?.creds?.registered)) {
-        pairingStates[targetNumber] = false;
+    // Allow re-pairing if not registered
+    if (pairingStates[num] && (!botSocks[num] || !botSocks[num].authState?.creds?.registered)) {
+        pairingStates[num] = false;
     }
     
-    if (!pairingStates[targetNumber]) {
+    if (!pairingStates[num]) {
         // Only stop and delete if the bot is ALREADY registered
-        if (botSocks[targetNumber]?.authState?.creds?.registered) {
-            if (botSocks[targetNumber]) {
-                try {
-                    botSocks[targetNumber].ev.removeAllListeners();
-                    botSocks[targetNumber].end(undefined);
-                    delete botSocks[targetNumber];
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                } catch (e) {}
-            }
+        if (botSocks[num]?.authState?.creds?.registered) {
+            try {
+                botSocks[num].ev.removeAllListeners();
+                botSocks[num].end(undefined);
+                delete botSocks[num];
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (e) {}
 
             // Clear session for fresh pairing
-            const sessionPath = path.join('sessions', targetNumber);
+            const sessionPath = path.join('sessions', num);
             if (fs.existsSync(sessionPath)) {
                 try { fs.emptyDirSync(sessionPath); fs.removeSync(sessionPath); } catch (e) {}
             }
         }
 
-        pairingCodes[targetNumber] = "";
-        pairingStates[targetNumber] = true;
+        pairingCodes[num] = "";
+        pairingStates[num] = true;
         
         // Start bot in background
         (async () => {
             try {
-                await startBot(targetNumber, true);
+                await startBot(num, true);
             } catch (err) {
-                console.log('Pairing error:', err);
-                pairingStates[targetNumber] = false;
+                console.log(`Pairing error for ${num}:`, err);
+                pairingStates[num] = false;
             }
         })();
     }
     
-    // Send response immediately to avoid "Initializing..." hang
     res.json({ status: 'success' });
 });
 
 app.post('/api/reset', async (req, res) => {
     const { phone } = req.body;
+    if (!phone) return res.json({ status: 'error', message: 'Phone number required' });
+    const num = phone.replace(/[^0-9]/g, '');
+
     try {
-        if (phone) {
-            const targetNumber = phone.replace(/[^0-9]/g, '');
-            if (botSocks[targetNumber]) {
-                botSocks[targetNumber].ev.removeAllListeners();
-                botSocks[targetNumber].end(undefined);
-                delete botSocks[targetNumber];
-            }
-            const sessionPath = path.join('sessions', targetNumber);
-            if (fs.existsSync(sessionPath)) {
-                fs.emptyDirSync(sessionPath);
-                fs.removeSync(sessionPath);
-            }
-            res.json({ status: 'success', message: `Bot for +${targetNumber} reset successfully.` });
-        } else {
-            // Reset all
-            for (const num in botSocks) {
-                botSocks[num].ev.removeAllListeners();
-                botSocks[num].end(undefined);
-            }
-            if (fs.existsSync('sessions')) {
-                fs.emptyDirSync('sessions');
-            }
-            res.json({ status: 'success', message: 'All bots reset successfully.' });
-            process.exit(0);
+        if (botSocks[num]) {
+            botSocks[num].ev.removeAllListeners();
+            botSocks[num].end(undefined);
+            delete botSocks[num];
         }
+        const sessionPath = path.join('sessions', num);
+        if (fs.existsSync(sessionPath)) {
+            fs.emptyDirSync(sessionPath);
+            fs.removeSync(sessionPath);
+        }
+        res.json({ status: 'success' });
     } catch (e) {
-        res.status(500).json({ status: 'error', message: String(e) });
+        res.json({ status: 'error', message: e instanceof Error ? e.message : String(e) });
     }
 });
 
 app.get('/api/status', (req, res) => {
     const { phone } = req.query;
-    if (phone) {
-        const targetNumber = (phone as string).replace(/[^0-9]/g, '');
-        res.json({ 
-            code: pairingCodes[targetNumber] || "", 
-            connected: botSocks[targetNumber]?.authState?.creds?.registered || false 
-        });
-    } else {
-        const activeSessions = Object.keys(botSocks).filter(num => botSocks[num]?.authState?.creds?.registered);
-        res.json({ 
-            connected: activeSessions.length > 0,
-            activeSessions
-        });
-    }
+    if (!phone) return res.json({ error: 'Phone number required' });
+    const num = (phone as string).replace(/[^0-9]/g, '');
+
+    res.json({ 
+        code: pairingCodes[num] || "", 
+        connected: botSocks[num]?.authState?.creds?.registered || false 
+    });
 });
 
-async function startBot(phoneNumber?: string, isNewPairing = false) {
-    if (!phoneNumber) {
-        // Migration check: if old session exists, move it
-        if (fs.existsSync('./session/creds.json')) {
-            try {
-                const creds = fs.readJsonSync('./session/creds.json');
-                const myNumber = creds.me.id.split(':')[0];
-                const newPath = path.join('sessions', myNumber);
-                fs.ensureDirSync(newPath);
-                fs.moveSync('./session', newPath, { overwrite: true });
-                console.log(`Migrated old session to sessions/${myNumber}`);
-                return startBot(myNumber);
-            } catch (e) {
-                console.log('Migration failed:', e);
-            }
-        }
+app.get('/api/logs', (req, res) => {
+    res.json(logBuffer);
+});
+
+app.post('/api/restart', (req, res) => {
+    console.log('Restarting system via dashboard...');
+    res.json({ status: 'success' });
+    setTimeout(() => process.exit(0), 1000);
+});
+
+app.post('/api/stop', async (req, res) => {
+    console.log('Stopping all bots via dashboard...');
+    for (const num in botSocks) {
+        try {
+            botSocks[num].ev.removeAllListeners();
+            botSocks[num].end(undefined);
+            delete botSocks[num];
+        } catch (e) {}
+    }
+    res.json({ status: 'success' });
+});
+
+async function startBot(phoneNumber: string, isNewPairing = false) {
+    if (connectingStates[phoneNumber]) {
+        console.log(`[DEBUG] Connection already in progress for ${phoneNumber}, skipping...`);
         return;
     }
+    connectingStates[phoneNumber] = true;
+    let sock: any;
 
-    const sessionPath = path.join('sessions', phoneNumber);
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const settings = getSettings(phoneNumber);
-    const botRetryCache = new NodeCache();
-    const botSpamTracker: { [user: string]: { count: number, lastMessageTime: number } } = {};
-    const botIgnoredMessageIds = new Set<string>();
-    const botMassAddingGroups = new Set<string>();
-    
-    // Fallback version if fetch fails
-    let version: any = [2, 3000, 1015901307]; 
     try {
-        const v = await fetchLatestBaileysVersion();
-        version = v.version;
-    } catch (e) {
-        console.log('Error fetching version, using fallback');
-    }
-
-    const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-        },
-        browser: ["Mac OS", "Chrome", "124.0.6367.207"],
-        msgRetryCounterCache: botRetryCache,
-        generateHighQualityLinkPreview: true,
-        keepAliveIntervalMs: 30000,
-        markOnlineOnConnect: true,
-        syncFullHistory: false,
-        retryRequestDelayMs: 5000,
-        defaultQueryTimeoutMs: 120000,
-        connectTimeoutMs: 120000,
-    });
-
-    botSocks[phoneNumber] = sock;
-    store.bind(sock.ev);
-
-    // Pairing Code Logic
-    if (!sock.authState.creds.registered && phoneNumber) {
-        console.log(chalk.yellow(`[!] Requesting Pairing Code for ${phoneNumber}...`));
-        setTimeout(async () => {
+        // Cleanup existing connection to prevent conflict
+        if (botSocks[phoneNumber]) {
             try {
-                let code = await sock.requestPairingCode(phoneNumber);
-                pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
-            } catch (err) {
-                console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
-                console.log(chalk.red(`Error stack: ${(err as any).stack}`));
-                pairingStates[phoneNumber] = false;
-            }
-        }, 5000);
-    }
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', async (update) => {
-        console.log(chalk.blue(`[DEBUG] Connection update: ${JSON.stringify(update)}`));
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(chalk.yellow(`[!] Connection closed for ${phoneNumber}. Reconnecting: ${shouldReconnect}`));
-            if (shouldReconnect) {
-                setTimeout(async () => {
-                    await startBot(phoneNumber, isNewPairing);
-                }, 5000); // 5s delay to prevent loops
-            } else {
-                pairingStates[phoneNumber] = false;
+                const oldSock = botSocks[phoneNumber];
+                oldSock.ev.removeAllListeners('connection.update');
+                oldSock.ev.removeAllListeners('creds.update');
+                oldSock.ev.removeAllListeners('messages.upsert');
+                oldSock.end(undefined);
                 delete botSocks[phoneNumber];
-                console.log(chalk.red(`[!] Logged out for ${phoneNumber}. Please pair again.`));
-            }
-        } else if (connection === 'open') {
-            console.log(chalk.green(`\n[+] ${BOT_NAME} CONNECTED SUCCESSFULLY FOR ${phoneNumber}!\n`));
-            pairingStates[phoneNumber] = false;
-
-            // Auto Join Group
-            try {
-                await sock.groupAcceptInvite('EhiFIIYPxZM5jTUfXYH8M9');
-                console.log('Auto-joined support group!');
-            } catch (e) {
-                console.log('Auto-join failed (probably already joined):', e);
-            }
-
-            // Auto Join Channel
-            try {
-                const newsletterCode = '0029Vb6Vxo960eBmxo0Q5z0Z';
-                const metadata = await (sock as any).newsletterMetadata("invite", newsletterCode);
-                await (sock as any).newsletterFollow(metadata.id);
-                console.log('Auto-joined support channel!');
-            } catch (e) {
-                console.log('Auto-join channel failed:', e);
-            }
-
-            // Send Welcome Message & Menu ONLY on new pairing
-            if (isNewPairing) {
-                try {
-                    const userJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                    console.log(`[DEBUG] Sending welcome message to ${userJid}`);
-                    const welcomeMsg = `*🧙‍♂️ WELCOME TO ${BOT_NAME}!*
-
-Hello! Your bot has been successfully connected and is now active.
-
-*BOT STATUS:*
-⚡ Status: Online
-⚡ Prefix: ${PREFIX}
-⚡ Owner: @254111967697
-
-Type *${PREFIX}menu* to see all available commands.
-
-Enjoy using TECHWIZARD!`;
-
-                    const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷
-┃ 👤 User: ${userJid.split('@')[0]}
-┃ 👑 Owner: @254111967697
-┃ ⏱ Runtime: ${runtime(process.uptime())}
-┃ ⚡ Status: Online
-┃ 🔣 Prefix: ${PREFIX}
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👤 GENERAL COMMANDS 〕━━┈⊷
-┃ ${PREFIX}menu
-┃ ${PREFIX}allmenu
-┃ ${PREFIX}ping
-┃ ${PREFIX}alive
-┃ ${PREFIX}owner
-┃ ${PREFIX}runtime
-┃ ${PREFIX}speed
-┃ ${PREFIX}id
-┃ ${PREFIX}deploybot / deploy
-┃ ${PREFIX}afk
-┃ ${PREFIX}reminder
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🤖 AI SYSTEM 〕━━┈⊷
-┃ ${PREFIX}autoreply on/off
-┃ ${PREFIX}chatbot on/off
-┃ ${PREFIX}resetai
-┃ ${PREFIX}ai / ask / chatgpt
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👑 OWNER COMMANDS 〕━━┈⊷
-┃ ${PREFIX}admin
-┃ ${PREFIX}addadmin
-┃ ${PREFIX}removeadmin
-┃ ${PREFIX}broadcast / bc
-┃ ${PREFIX}setprefix
-┃ ${PREFIX}setmenuimage
-┃ ${PREFIX}shutdown
-┃ ${PREFIX}userjoin
-┃ ${PREFIX}join / autojoin
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 ⚙️ AUTO SYSTEM 〕━━┈⊷
-┃ ${PREFIX}autoread on/off
-┃ ${PREFIX}autotyping on/off
-┃ ${PREFIX}autorecording on/off
-┃ ${PREFIX}autoreact on/off
-┃ ${PREFIX}autoadd on/off
-┃ ${PREFIX}autoapprove on/off
-┃ ${PREFIX}alwaysonline on/off
-┃ ${PREFIX}autoviewstatus on/off
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 👥 GROUP COMMANDS 〕━━┈⊷
-┃ ${PREFIX}add
-┃ ${PREFIX}kick
-┃ ${PREFIX}promote
-┃ ${PREFIX}demote
-┃ ${PREFIX}tagall
-┃ ${PREFIX}hidetag
-┃ ${PREFIX}addall
-┃ ${PREFIX}stopadd
-┃ ${PREFIX}linkgc
-┃ ${PREFIX}leave
-┃ ${PREFIX}mute / closegroup
-┃ ${PREFIX}unmute / opengroup
-┃ ${PREFIX}welcome on/off
-┃ ${PREFIX}goodbye on/off
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🛡 PROTECTION COMMANDS 〕━━┈⊷
-┃ ${PREFIX}antilink on/off
-┃ ${PREFIX}antispam on/off
-┃ ${PREFIX}antimention on/off
-┃ ${PREFIX}antitag on/off
-┃ ${PREFIX}warn
-┃ ${PREFIX}block
-┃ ${PREFIX}unblock
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 🧰 TOOL COMMANDS 〕━━┈⊷
-┃ ${PREFIX}translate
-┃ ${PREFIX}calc
-┃ ${PREFIX}tts
-┃ ${PREFIX}shorturl
-┃ ${PREFIX}qr
-┃ ${PREFIX}readqr
-┃ ${PREFIX}vv / viewonce
-┃ ${PREFIX}sticker / s
-┃ ${PREFIX}toimg
-┃ ${PREFIX}play
-╰━━━━━━━━━━━━━━━┈⊷
-
-╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
-┃ ${PREFIX}vcf
-┃ ${PREFIX}add (reply vcf)
-╰━━━━━━━━━━━━━━━┈⊷
-
-╰━❮ ${BOT_NAME} SYSTEM ACTIVE ❯━╯`;
-
-                    await sock.sendMessage(userJid, { text: welcomeMsg, mentions: [userJid, '254111967697@s.whatsapp.net'] });
-                    await sock.sendMessage(userJid, { text: menuText, mentions: ['254111967697@s.whatsapp.net'] });
-                    isNewPairing = false; // Reset flag after sending
-                    console.log(`[DEBUG] Welcome message sent successfully.`);
-                } catch (e) {
-                    console.log(`[ERROR] Failed to send welcome message:`, e);
-                }
-            }
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            } catch (e) {}
         }
-    });
+
+        const sessionPath = path.join('sessions', phoneNumber);
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const settings = getSettings(phoneNumber);
+        const botRetryCache = new NodeCache();
+        
+        // Fallback version if fetch fails
+        let version: any = [2, 3000, 1015901307]; 
+        try {
+            const v = await fetchLatestBaileysVersion();
+            version = v.version;
+        } catch (e) {
+            console.log('Error fetching version, using fallback');
+        }
+
+        const sock = makeWASocket({
+            version,
+            logger: pino({ level: 'silent' }),
+            printQRInTerminal: false,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
+            },
+            browser: ["Mac OS", "Chrome", "124.0.6367.207"],
+            msgRetryCounterCache: botRetryCache,
+            generateHighQualityLinkPreview: true,
+            keepAliveIntervalMs: 30000,
+            markOnlineOnConnect: true,
+            syncFullHistory: false,
+            retryRequestDelayMs: 5000,
+            defaultQueryTimeoutMs: 120000,
+            connectTimeoutMs: 120000,
+        });
+
+        botSocks[phoneNumber] = sock;
+        store.bind(sock.ev);
+
+        // Pairing Code Logic
+        if (!sock.authState.creds.registered && phoneNumber) {
+            console.log(chalk.yellow(`[!] Requesting Pairing Code for ${phoneNumber}...`));
+            setTimeout(async () => {
+                try {
+                    let code = await sock.requestPairingCode(phoneNumber);
+                    pairingCodes[phoneNumber] = code?.match(/.{1,4}/g)?.join("-") || code;
+                    console.log(chalk.black.bgGreen(`\n--- PAIRING CODE FOR ${phoneNumber}: ${pairingCodes[phoneNumber]} ---\n`));
+                } catch (err) {
+                    console.log(chalk.red(`Error requesting pairing code for ${phoneNumber}: ${err}`));
+                    pairingStates[phoneNumber] = false;
+                    connectingStates[phoneNumber] = false; // Reset on failure
+                }
+            }, 3000);
+        }
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect } = update;
+            console.log(chalk.blue(`[DEBUG] Connection update for ${phoneNumber}: ${connection || 'status'}`));
+            
+            if (connection === 'close') {
+                connectingStates[phoneNumber] = false;
+                if (botSocks[phoneNumber] !== sock) return;
+
+                const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.log(chalk.yellow(`[!] Connection closed for ${phoneNumber} (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`));
+                
+                if (shouldReconnect) {
+                    const delay = statusCode === 440 ? 30000 : 5000;
+                    setTimeout(() => startBot(phoneNumber, isNewPairing), delay);
+                } else {
+                    pairingStates[phoneNumber] = false;
+                    delete botSocks[phoneNumber];
+                }
+            } else if (connection === 'open') {
+                if (botSocks[phoneNumber] !== sock) return;
+                console.log(chalk.green(`\n[+] ${BOT_NAME} (${phoneNumber}) CONNECTED SUCCESSFULLY!\n`));
+                connectingStates[phoneNumber] = false;
+                pairingStates[phoneNumber] = false;
+                pairingCodes[phoneNumber] = "";
+
+                // Logic to run once on connection open
+                (async () => {
+                    // Auto Join Group
+                    try {
+                        await sock.groupAcceptInvite('EhiFIIYPxZM5jTUfXYH8M9');
+                        console.log(`Auto-joined support group for ${phoneNumber}!`);
+                    } catch (e) {}
+
+                    // Auto Join Channel
+                    try {
+                        const newsletterCode = '0029Vb6Vxo960eBmxo0Q5z0Z';
+                        const metadata = await (sock as any).newsletterMetadata("invite", newsletterCode);
+                        if (metadata?.id) {
+                            try {
+                                await (sock as any).newsletterFollow(metadata.id);
+                                console.log(`Auto-joined support channel for ${phoneNumber}!`);
+                            } catch (e) {}
+                        }
+                    } catch (e) {}
+                    // Send Welcome Message & Menu ONLY on new pairing
+                    if (isNewPairing) {
+                        try {
+                            const userJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+                            console.log(`[DEBUG] Sending welcome message to ${userJid}`);
+                            // Simplified welcome/menu to avoid target context issues
+                            await sock.sendMessage(userJid, { text: `*🧙‍♂️ WELCOME TO ${BOT_NAME}!*` });
+                            isNewPairing = false;
+                        } catch (e) {}
+                    }
+                })();
+            }
+
+        });
+    // Deprecated welcome message block moved to connection listener
+
+
+
+    // Clean
+
+    // All junk removed
+
+
+
+
+    // Menu content block removed
+
+
+
+
+
+
+
+
+
+
+    // End of dangling strings
+
 
     sock.ev.on('group-participants.update', async (anu) => {
-        console.log(`[DEBUG] Group Participants Update for ${phoneNumber}: ${anu.id} Action: ${anu.action}`);
+        console.log(`[DEBUG] Group Participants Update: ${anu.id} Action: ${anu.action}`);
         try {
-            if (botMassAddingGroups.has(anu.id)) return; // Skip if mass adding (silent mode)
+            if (massAddingGroups.has(anu.id)) return; // Skip if mass adding (silent mode)
             
             let metadata;
             try {
@@ -671,6 +811,7 @@ Enjoy using TECHWIZARD!`;
 
     sock.ev.on('messages.upsert', async (chatUpdate: any) => {
         try {
+            if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
             const mek = chatUpdate.messages[0];
             if (!mek.message) return;
             mek.message = (getContentType(mek.message) === 'ephemeralMessage') ? mek.message.ephemeralMessage.message : mek.message;
@@ -764,7 +905,7 @@ Enjoy using TECHWIZARD!`;
             const sender = m.sender || '';
             const senderNumber = sender.split('@')[0] || '';
             const isOwner = OWNER_NUMBER.includes(senderNumber);
-            const isSessionOwner = (senderNumber === phoneNumber) || isOwner;
+            const isSessionOwner = (senderNumber === sock.user.id.split(':')[0]) || isOwner;
             const isAdmin = settings.admins.includes(senderNumber) || isSessionOwner;
 
             console.log(`[DEBUG] isCmd=${isCmd}, command=${command}, sender=${sender}`);
@@ -777,7 +918,7 @@ Enjoy using TECHWIZARD!`;
                     }
                 } catch (e) {
                     console.log(chalk.red(`Error in command ${command}:`, e));
-                    m.reply("An error occurred while executing this command.");
+                    m.reply(`*⚠️ COMMAND FAILED*\n\n*Command:* ${command}\n*Error:* ${e instanceof Error ? e.message : String(e)}`);
                 }
             }
 
@@ -838,38 +979,42 @@ Enjoy using TECHWIZARD!`;
                     case 'menu':
                     case 'help':
                     case 'allmenu': {
-                        await menuCommands.menu(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await menuCommands.menu(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, OWNER_NUMBER, SERVER_ID, CONTROL_LINK);
                         break;
                     }
 
                     case 'speed':
                     case 'ping': {
-                        await generalCommands.speed(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.speed(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
                     }
 
                     case 'alive':
-                        await generalCommands.alive(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.alive(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
 
                     case 'owner':
-                        await generalCommands.owner(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.owner(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, OWNER_NUMBER);
                         break;
 
                     case 'runtime':
-                        await generalCommands.runtimeCmd(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.runtimeCmd(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
 
                     case 'id':
-                        await generalCommands.id(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.id(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
+                        break;
+
+                    case 'link':
+                        await generalCommands.link(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, OWNER_NUMBER, SERVER_ID, CONTROL_LINK);
                         break;
 
                     case 'afk':
-                        await generalCommands.afk(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.afk(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
 
                     case 'reminder':
-                        await generalCommands.reminder(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await generalCommands.reminder(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
 
                     case 'autoreply':
@@ -928,7 +1073,7 @@ Enjoy using TECHWIZARD!`;
                         if (!m.quoted || m.quoted.mtype !== 'imageMessage') return m.reply(`Reply to an image with ${prefix}setmenuimage to change the menu header.`);
                         try {
                             const media = await m.quoted.download();
-                            const imagePath = `./sessions/${phoneNumber}/menu_image.jpg`;
+                            const imagePath = `./sessions/bot/menu_image.jpg`;
                             fs.ensureDirSync(path.dirname(imagePath));
                             await fs.writeFile(imagePath, media);
                             settings.menuImage = imagePath;
@@ -951,24 +1096,14 @@ Enjoy using TECHWIZARD!`;
                         const joinInviteCode = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/)?.[1];
                         if (!joinInviteCode) return m.reply('Invalid WhatsApp group link!');
                         
-                        const botNumbers = Object.keys(botSocks);
-                        m.reply(`🚀 Attempting to join ${botNumbers.length} bots to the group...`);
+                        m.reply(`🚀 Attempting to join the group...`);
                         
-                        let joinSuccess = 0;
-                        let joinFail = 0;
-                        
-                        for (const num of botNumbers) {
-                            try {
-                                const botSock = botSocks[num];
-                                if (botSock) {
-                                    await botSock.groupAcceptInvite(joinInviteCode);
-                                    joinSuccess++;
-                                }
-                            } catch (e) {
-                                joinFail++;
-                            }
+                        try {
+                            await sock.groupAcceptInvite(joinInviteCode);
+                            m.reply(`✅ *USERJOIN COMPLETE*`);
+                        } catch (e) {
+                            m.reply(`❌ *USERJOIN FAILED*\n\nError: ${e}`);
                         }
-                        m.reply(`✅ *USERJOIN COMPLETE*\n\nSuccess: ${joinSuccess}\nFailed: ${joinFail}`);
                         break;
 
                     case 'autoread':
@@ -1034,14 +1169,15 @@ Enjoy using TECHWIZARD!`;
                                     }
                                 }
 
-                                const vcfBuffer = await m.quoted.download();
+                                const vcfBuffer = m.quoted ? await m.quoted.download() : Buffer.from('');
                                 const vcfText = vcfBuffer.toString();
-                                // More robust VCF number extraction
                                 let participantsToAdd = vcfText.match(/TEL(?:;[^:]*)?:([^\n\r]*)/gi)?.map(n => {
                                     const num = n.split(':')[1].replace(/[^0-9]/g, '');
                                     return num.length > 5 ? num + '@s.whatsapp.net' : null;
                                 }).filter(Boolean) as string[] || [];
                                 
+                                const textNumbers = text.match(/\d{10,15}/g)?.map(n => n + '@s.whatsapp.net') || [];
+                                participantsToAdd = [...participantsToAdd, ...textNumbers];
                                 participantsToAdd = [...new Set(participantsToAdd)];
                                 
                                 if (participantsToAdd.length === 0) {
@@ -1054,31 +1190,25 @@ Enjoy using TECHWIZARD!`;
                                     return m.reply('No valid numbers found in the replied message!');
                                 }
                                 
-                                const botNumbers = Object.keys(botSocks);
-                                m.reply(`🚀 *SAFE MULTI-BOT MASS ADD*\n\nTarget Group: ${targetGroup}\nFound ${participantsToAdd.length} numbers.\nUsing ${botNumbers.length} bots.\nSafety Delay: 3-7s per add.\nThis process is silent.\nType ${prefix}autoadd off to stop.`);
+                                m.reply(`🚀 *SAFE MASS ADD*\n\nTarget Group: ${targetGroup}\nFound ${participantsToAdd.length} numbers.\nSafety Delay: 3-7s per add.\nThis process is silent.\nType ${prefix}autoadd off to stop.`);
                                 
                                 massAddingGroups.add(from);
                                 let successCount = 0;
                                 let failCount = 0;
                                 
                                 try {
-                                    // Distribute work among bots
                                     for (let i = 0; i < participantsToAdd.length; i++) {
                                         if (!massAddingGroups.has(from)) {
                                             m.reply('🛑 Mass add stopped by user.');
                                             return;
                                         }
                                         const jid = participantsToAdd[i];
-                                        const botIndex = i % botNumbers.length;
-                                        const botSock = botSocks[botNumbers[botIndex]];
                                         
-                                        if (botSock) {
-                                            try {
-                                                await botSock.groupParticipantsUpdate(targetGroup, [jid], 'add');
-                                                successCount++;
-                                            } catch (e) {
-                                                failCount++;
-                                            }
+                                        try {
+                                            await sock.groupParticipantsUpdate(targetGroup, [jid], 'add');
+                                            successCount++;
+                                        } catch (e) {
+                                            failCount++;
                                         }
                                         // Safe delay to avoid bans (3-7 seconds)
                                         const delay = Math.floor(Math.random() * 4000) + 3000;
@@ -1135,7 +1265,7 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'add':
-                        await groupCommands.add(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime);
+                        await groupCommands.add(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime);
                         break;
 
                     case 'addall': {
@@ -1194,8 +1324,7 @@ Enjoy using TECHWIZARD!`;
                             
                             if (toAdd.length === 0) return m.reply('All numbers are already in the group!');
 
-                            const botNumbers = Object.keys(botSocks);
-                            m.reply(`*🛡️ PROTECTIVE ADD MODE*\n\nFound ${toAdd.length} new numbers.\nUsing ${botNumbers.length} bots for distribution.\nStarting safe add process (3-7s delay) to prevent bans.`);
+                            m.reply(`*🛡️ PROTECTIVE ADD MODE*\n\nFound ${toAdd.length} new numbers.\nStarting safe add process (3-7s delay) to prevent bans.`);
                             
                             massAddingGroups.add(from);
                             let successCount = 0;
@@ -1208,24 +1337,18 @@ Enjoy using TECHWIZARD!`;
                                 }
                                 
                                 const jid = toAdd[i];
-                                const botIndex = i % botNumbers.length;
-                                const botNum = botNumbers[botIndex];
-                                const botSock = botSocks[botNum];
                                 
                                 try {
-                                    if (botSock) {
-                                        await botSock.groupParticipantsUpdate(from, [jid], 'add');
-                                    } else {
-                                        await sock.groupParticipantsUpdate(from, [jid], 'add');
-                                    }
+                                    await sock.groupParticipantsUpdate(from, [jid], 'add');
                                     successCount++;
                                 } catch (e) {
-                                    console.log(`[ERROR] Failed to add ${jid} using bot ${botSock ? 'botSock' : 'sock'}:`, e);
+                                    console.log(`[ERROR] Failed to add ${jid}:`, e);
                                     failCount++;
                                 }
                                 
-                                // No delay for immediate adding
-                                await new Promise(resolve => setTimeout(resolve, 0));
+                                // Safe delay
+                                const delay = Math.floor(Math.random() * 4000) + 3000;
+                                await new Promise(resolve => setTimeout(resolve, delay));
                             }
                             
                             m.reply(`*✅ ADDALL COMPLETE*\n\nAdded: ${successCount}\nFailed: ${failCount}`);
@@ -1264,15 +1387,15 @@ Enjoy using TECHWIZARD!`;
                         break;
 
                     case 'kick':
-                        await groupCommands.kick(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
+                        await groupCommands.kick(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, isAdmin);
                         break;
 
                     case 'promote':
-                        await groupCommands.promote(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
+                        await groupCommands.promote(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, isAdmin);
                         break;
 
                     case 'demote':
-                        await groupCommands.demote(m, sock, text, from, sender, prefix, settings, phoneNumber, BOT_NAME, runtime, isAdmin);
+                        await groupCommands.demote(m, sock, text, from, sender, prefix, settings, sock.user.id.split(':')[0], BOT_NAME, runtime, isAdmin);
                         break;
 
                     case 'linkgc': {
@@ -1330,10 +1453,9 @@ Enjoy using TECHWIZARD!`;
                                     
                                     groupSchedules[phoneNumber][from].close = setTimeout(async () => {
                                         try {
-                                            const botSock = botSocks[phoneNumber];
-                                            if (botSock) {
-                                                await botSock.groupSettingUpdate(from, 'announcement');
-                                                await botSock.sendMessage(from, { text: 'Group closed as scheduled!' });
+                                            if (sock) {
+                                                await sock.groupSettingUpdate(from, 'announcement');
+                                                await sock.sendMessage(from, { text: 'Group closed as scheduled!' });
                                             }
                                         } catch (e) { console.log(e); }
                                         scheduleClose(); // Reschedule for next day
@@ -1391,10 +1513,9 @@ Enjoy using TECHWIZARD!`;
                                     
                                     groupSchedules[phoneNumber][from].open = setTimeout(async () => {
                                         try {
-                                            const botSock = botSocks[phoneNumber];
-                                            if (botSock) {
-                                                await botSock.groupSettingUpdate(from, 'not_announcement');
-                                                await botSock.sendMessage(from, { text: 'Group opened as scheduled!' });
+                                            if (sock) {
+                                                await sock.groupSettingUpdate(from, 'not_announcement');
+                                                await sock.sendMessage(from, { text: 'Group opened as scheduled!' });
                                             }
                                         } catch (e) { console.log(e); }
                                         scheduleOpen(); // Reschedule for next day
@@ -1673,7 +1794,7 @@ Enjoy using TECHWIZARD!`;
                         if (!targetBlock || targetBlock === '@s.whatsapp.net') return m.reply('Please specify a user to block.');
                         
                         const targetNumber = targetBlock.split('@')[0];
-                        const isTargetBotUser = !!botSocks[targetNumber] || fs.existsSync(path.join('sessions', targetNumber));
+                        const isTargetBotUser = (targetNumber === sock.user.id.split(':')[0]) || fs.existsSync(path.join('sessions', targetNumber));
                         
                         if (isSessionOwner || isTargetBotUser) {
                             await sock.updateBlockStatus(targetBlock, 'block');
@@ -1690,7 +1811,7 @@ Enjoy using TECHWIZARD!`;
                         if (!targetUnblock || targetUnblock === '@s.whatsapp.net') return m.reply('Please specify a user to unblock.');
                         
                         const targetNumberUn = targetUnblock.split('@')[0];
-                        const isTargetBotUserUn = !!botSocks[targetNumberUn] || fs.existsSync(path.join('sessions', targetNumberUn));
+                        const isTargetBotUserUn = (targetNumberUn === sock.user.id.split(':')[0]) || fs.existsSync(path.join('sessions', targetNumberUn));
 
                         if (isSessionOwner || isTargetBotUserUn) {
                             await sock.updateBlockStatus(targetUnblock, 'unblock');
@@ -1706,7 +1827,7 @@ Enjoy using TECHWIZARD!`;
                         if (!isOwner) return m.reply('Owner only!');
                         if (!text) return m.reply('Text required!');
                         const chatsBc = await sock.groupFetchAllParticipating();
-                        const groupsBc = Object.values(chatsBc).map(v => v.id);
+                        const groupsBc = Object.values(chatsBc).map((v: any) => v.id);
                         for (let id of groupsBc) {
                             await m.reply(`*BROADCAST*\n\n${text}`, id);
                         }
@@ -1715,23 +1836,98 @@ Enjoy using TECHWIZARD!`;
 
                     case 'vcf':
                         try {
-                            if (m.isGroup && (!m.quoted || m.quoted.mtype !== 'documentMessage')) {
-                                const groupMetadataVcf = await sock.groupMetadata(from);
-                                const participantsVcf = groupMetadataVcf.participants;
-                                let vcfData = '';
-                                for (let i = 0; i < participantsVcf.length; i++) {
-                                    const jid = participantsVcf[i].id;
-                                    const number = jid.split('@')[0];
-                                    vcfData += `BEGIN:VCARD\nVERSION:3.0\nFN:Group Member ${i + 1}\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD\n`;
+                            const groupLinkMatch = text.match(/chat\.whatsapp\.com\/([0-9A-Za-z]{20,24})/);
+                            
+                            if (groupLinkMatch) {
+                                const code = groupLinkMatch[1];
+                                m.reply('🚀 Processing group link... Fetching participants.');
+                                
+                                try {
+                                    // First get ID without joining to handle already-joined case
+                                    const inviteInfo = await sock.groupGetInviteInfo(code);
+                                    const groupId = inviteInfo.id;
+                                    
+                                    if (!groupId) throw new Error("Could not retrieve group ID from link.");
+
+                                    try {
+                                        await sock.groupAcceptInvite(code);
+                                    } catch (joinErr) {
+                                        console.log(`[VCF] Join attempt note:`, joinErr);
+                                    }
+
+                                    // Retry metadata a few times as it might not be available instantly
+                                    let groupMetadataVcf: any;
+                                    let participantsVcf: any[] = [];
+                                    
+                                    for (let attempt = 1; attempt <= 3; attempt++) {
+                                        try {
+                                            groupMetadataVcf = await sock.groupMetadata(groupId);
+                                            participantsVcf = groupMetadataVcf.participants || [];
+                                            if (participantsVcf.length > 0) break;
+                                        } catch (e) {
+                                            console.log(`[VCF] Metadata attempt ${attempt} failed:`, e);
+                                        }
+                                        await new Promise(resolve => setTimeout(resolve, 3000)); // 3s wait between retries
+                                    }
+                                    
+                                    if (!participantsVcf || participantsVcf.length === 0) {
+                                        return m.reply('❌ No participants found. The bot might not be in the group or members are hidden.');
+                                    }
+
+                                    let vcfData = '';
+                                    for (let i = 0; i < participantsVcf.length; i++) {
+                                        const participant = participantsVcf[i] as any;
+                                        const jid = participant.id;
+                                        const number = jid.split('@')[0];
+                                        vcfData += `BEGIN:VCARD\nVERSION:3.0\nFN:Member ${i + 1}\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD\n`;
+                                    }
+                                    
+                                    const vcfName = (groupMetadataVcf?.subject || 'Group').replace(/[^a-zA-Z0-9]/g, '_');
+                                    const vcfPath = path.resolve(`./${vcfName}_${Date.now()}.vcf`);
+                                    
+                                    await fs.writeFile(vcfPath, vcfData);
+                                    
+                                    if (fs.existsSync(vcfPath)) {
+                                        await sock.sendMessage(from, { 
+                                            document: await fs.readFile(vcfPath), 
+                                            mimetype: 'text/vcard', 
+                                            fileName: `${groupMetadataVcf?.subject || 'Group'}.vcf`,
+                                            caption: `✅ Extracted ${participantsVcf.length} contacts from *${groupMetadataVcf?.subject || 'Unknown Group'}*`
+                                        }, { quoted: m });
+                                        
+                                        // Safe cleanup
+                                        try {
+                                            await fs.unlink(vcfPath);
+                                        } catch (e) {}
+                                    } else {
+                                        throw new Error("VCF file generation failed.");
+                                    }
+                                } catch (e) {
+                                    console.error('[VCF ERROR]', e);
+                                    m.reply(`❌ Failed to process group link.\nError: ${e instanceof Error ? e.message : String(e)}`);
                                 }
-                                const vcfPath = `./${groupMetadataVcf.subject.replace(/[^a-zA-Z0-9]/g, '_')}.vcf`;
-                                await fs.writeFile(vcfPath, vcfData);
-                                await m.reply('', from, { 
-                                    document: await fs.readFile(vcfPath), 
-                                    mimetype: 'text/vcard', 
-                                    fileName: `${groupMetadataVcf.subject}.vcf` 
-                                });
-                                await fs.unlink(vcfPath);
+                            } else if (m.isGroup && (!m.quoted || m.quoted.mtype !== 'documentMessage')) {
+                                try {
+                                    const groupMetadataVcf = await sock.groupMetadata(from);
+                                    const participantsVcf = groupMetadataVcf.participants;
+                                    let vcfData = '';
+                                    for (let i = 0; i < participantsVcf.length; i++) {
+                                        const participant = participantsVcf[i] as any;
+                                        const jid = participant.id;
+                                        const number = jid.split('@')[0];
+                                        vcfData += `BEGIN:VCARD\nVERSION:3.0\nFN:Group Member ${i + 1}\nTEL;type=CELL;type=VOICE;waid=${number}:+${number}\nEND:VCARD\n`;
+                                    }
+                                    const vcfPath = `./${groupMetadataVcf.subject.replace(/[^a-zA-Z0-9]/g, '_')}.vcf`;
+                                    await fs.writeFile(vcfPath, vcfData);
+                                    await m.reply('', from, { 
+                                        document: await fs.readFile(vcfPath), 
+                                        mimetype: 'text/vcard', 
+                                        fileName: `${groupMetadataVcf.subject}.vcf` 
+                                    });
+                                    await fs.unlink(vcfPath);
+                                } catch (e) {
+                                    m.reply(`❌ Group VCF Error: ${e}`);
+                                }
                             } else if (m.quoted) {
                                 let vcfBuffer = await m.quoted.download();
                                 let vcfText = vcfBuffer.toString();
@@ -1751,12 +1947,13 @@ Enjoy using TECHWIZARD!`;
 
                     case 'deploybot':
                     case 'deploy':
+                        const baseUrl = getBaseUrl();
                         const deployText = `*🚀 HOW TO DEPLOY TECHWIZARD BOT*
 
 To deploy your own version of this bot, follow these steps:
 
 1. Visit our deployment portal:
-🔗 http://techwolf.wuaze.com
+🔗 ${baseUrl === 'http://localhost:3000' ? 'http://techwolf.wuaze.com' : baseUrl}
 
 2. Follow the instructions on the site to:
    - Get your session
@@ -1782,20 +1979,20 @@ To deploy your own version of this bot, follow these steps:
             // Anti-spam logic
             if (settings.antispam && !isAdmin && !m.key.fromMe) {
                 const now = Date.now();
-                if (!botSpamTracker[sender]) botSpamTracker[sender] = { count: 0, lastMessageTime: now };
+                if (!spamTracker[sender]) spamTracker[sender] = { count: 0, lastMessageTime: now };
                 
-                if (now - botSpamTracker[sender].lastMessageTime < 2000) { // 2 seconds window
-                    botSpamTracker[sender].count++;
-                    if (botSpamTracker[sender].count >= 5) { // 5 messages in 2 seconds
+                if (now - spamTracker[sender].lastMessageTime < 2000) { // 2 seconds window
+                    spamTracker[sender].count++;
+                    if (spamTracker[sender].count >= 5) { // 5 messages in 2 seconds
                         try {
                             await m.reply(`*ANTI-SPAM DETECTED*\n\n@${sender.split('@')[0]} please stop spamming!`, from, { mentions: [sender] });
-                            botSpamTracker[sender].count = 0; // Reset after warning
+                            spamTracker[sender].count = 0; // Reset after warning
                         } catch (e) {}
                     }
                 } else {
-                    botSpamTracker[sender].count = 1;
+                    spamTracker[sender].count = 1;
                 }
-                botSpamTracker[sender].lastMessageTime = now;
+                spamTracker[sender].lastMessageTime = now;
             }
 
             // Anti-mention logic
@@ -1848,7 +2045,11 @@ To deploy your own version of this bot, follow these steps:
 
 
 
-    return sock;
+        return sock;
+    } catch (err) {
+        console.error(`[CRITICAL] Error starting bot ${phoneNumber}:`, err);
+        connectingStates[phoneNumber] = false;
+    }
 }
 
 // Helper function to format messages
@@ -1980,14 +2181,12 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(chalk.green(`Server running on port ${PORT}`));
+    addLog(`System initialized on port ${PORT}`, 'system');
+    addLog(`TECHWIZARD v2.0.0 is ready`, 'user');
     
     // Self-ping to prevent Railway/Render/AI Studio from sleeping
     setInterval(() => {
-        const pingUrl = process.env.APP_URL 
-            ? `${process.env.APP_URL}/health` 
-            : process.env.RAILWAY_STATIC_URL 
-                ? `https://${process.env.RAILWAY_STATIC_URL}/health` 
-                : `http://localhost:${PORT}/health`;
+        const pingUrl = `${getBaseUrl()}/health`;
         axios.get(pingUrl).catch(() => {});
     }, 2 * 60 * 1000); // Every 2 minutes
 
@@ -1995,31 +2194,33 @@ app.listen(PORT, '0.0.0.0', async () => {
     setInterval(async () => {
         for (const num in botSocks) {
             try {
-                const botSet = getSettings(num);
-                if (botSet.alwaysonline && botSocks[num]?.authState?.creds?.registered) {
-                    // Check if socket is connected
-                    if (botSocks[num].ws && botSocks[num].ws.readyState === 1) { // 1 = OPEN
-                        // Presence update removed to prevent "last active" issues
-                    } else {
-                        console.log(`[!] Bot for ${num} seems offline, attempting to reconnect...`);
+                const sock = botSocks[num];
+                const settings = getSettings(num);
+                // Only attempt reconnect if not already in pairing/connecting state
+                if (settings.alwaysonline && sock?.authState?.creds?.registered && !pairingStates[num] && !connectingStates[num]) {
+                    const isClosed = !sock.ws || sock.ws.readyState !== 1;
+                    if (isClosed) {
+                        console.log(`[!] Bot ${num} detected offline by monitor, attempting to reconnect...`);
                         await startBot(num);
                     }
                 }
             } catch (e) {}
         }
-    }, 20000); // Every 20 seconds
+    }, 30000); // Increased to 30s
 
-    // Start all sessions
-    if (fs.existsSync('sessions')) {
-        const sessions = fs.readdirSync('sessions');
-        console.log(chalk.blue(`Found ${sessions.length} sessions, starting bots...`));
-        for (const session of sessions) {
-            if (fs.existsSync(path.join('sessions', session, 'creds.json'))) {
-                await startBot(session);
+    // Start all existing bot sessions
+    const sessionsDir = path.join('sessions');
+    if (fs.existsSync(sessionsDir)) {
+        const folders = fs.readdirSync(sessionsDir);
+        for (const folder of folders) {
+            const sessionPath = path.join(sessionsDir, folder);
+            if (fs.statSync(sessionPath).isDirectory() && folder !== 'bot') {
+                const credsFile = path.join(sessionPath, 'creds.json');
+                if (fs.existsSync(credsFile)) {
+                    console.log(chalk.blue(`[!] Starting existing session: ${folder}`));
+                    await startBot(folder);
+                }
             }
         }
-    } else {
-        // Migration check for single session
-        await startBot();
     }
 });

@@ -1,10 +1,10 @@
-export const menu = async (m: any, sock: any, text: string, from: string, sender: string, prefix: string, settings: any, phoneNumber: string, BOT_NAME: string, runtime: any) => {
+export const menu = async (m: any, sock: any, text: string, from: string, sender: string, prefix: string, settings: any, phoneNumber: string, BOT_NAME: string, runtime: any, OWNER_NUMBER: string, SERVER_ID: string, CONTROL_LINK: string) => {
     const uptime = process.uptime();
     const userNumber = sender.split('@')[0];
     const menuText = `╭━━〔 ♤ ${BOT_NAME} ♤ 〕━━┈⊷
 ┃ 👤 User: ${userNumber}
-┃ 👑 Owner: @254111967697
-┃ ⏱ Runtime: ${runtime(uptime)}
+┃ 👑 Owner: @${OWNER_NUMBER}
+${SERVER_ID ? `┃ 🆔 Server ID: ${SERVER_ID}\n` : ''}${CONTROL_LINK ? `┃ 🔗 Control: ${CONTROL_LINK}\n` : ''}${process.env.KATABUMP_URL ? '┃ 🚀 Hosted on: Katabump\n' : ''}┃ ⏱ Runtime: ${runtime(uptime)}
 ┃ ⚡ Status: Online
 ┃ 🔣 Prefix: ${prefix}
 ╰━━━━━━━━━━━━━━━┈⊷
@@ -18,6 +18,7 @@ export const menu = async (m: any, sock: any, text: string, from: string, sender
 ┃ ${prefix}runtime
 ┃ ${prefix}speed
 ┃ ${prefix}id
+┃ ${prefix}link
 ┃ ${prefix}deploybot / deploy
 ┃ ${prefix}afk
 ┃ ${prefix}reminder
@@ -94,11 +95,12 @@ export const menu = async (m: any, sock: any, text: string, from: string, sender
 
 ╭━━〔 📁 CONTACT COMMANDS 〕━━┈⊷
 ┃ ${prefix}vcf
+┃ ${prefix}vcf <group_link>
 ┃ ${prefix}add (reply vcf)
 ╰━━━━━━━━━━━━━━━┈⊷
 
 ╰━❮ ${BOT_NAME} SYSTEM ACTIVE ❯━╯`;
-    await m.reply(menuText, from, { mentions: ['254111967697@s.whatsapp.net'] });
+    await m.reply(menuText, from, { mentions: [`${OWNER_NUMBER}@s.whatsapp.net`] });
 };
 
 export const help = menu;
