@@ -114,20 +114,29 @@ async function startServer() {
         if (num in activePairingRequests) return activePairingRequests[num];
 
         const pairingPromise = new Promise<string>((resolve, reject) => {
-            const timeout = setTimeout(() => {
+            const timeoutId = setTimeout(() => {
                 pairingEvents.off('code', onCode);
                 delete activePairingRequests[num];
-                reject(new Error('Pairing timed out (40s)'));
-            }, 40000);
+                reject(new Error('Pairing timed out (45s)'));
+            }, 45000);
             
             const onCode = (data: any) => {
-                const rawCode = typeof data === 'string' ? data : data.code;
                 const p = typeof data === 'string' ? null : data.phoneNumber;
-
                 if (p && p !== num) return; 
 
+                if (data.error) {
+                    clearTimeout(timeoutId);
+                    pairingEvents.off('code', onCode);
+                    delete activePairingRequests[num];
+                    reject(new Error(data.error));
+                    return;
+                }
+
+                const rawCode = typeof data === 'string' ? data : data.code;
+                if (!rawCode) return;
+
                 const cleanCode = String(rawCode).replace(/[^A-Z0-9]/gi, '').toUpperCase();
-                clearTimeout(timeout);
+                clearTimeout(timeoutId);
                 pairingEvents.off('code', onCode);
                 delete activePairingRequests[num];
                 resolve(cleanCode);
@@ -135,7 +144,7 @@ async function startServer() {
             pairingEvents.on('code', onCode);
             
             startBot(num, true).catch(err => {
-                clearTimeout(timeout);
+                clearTimeout(timeoutId);
                 pairingEvents.off('code', onCode);
                 delete activePairingRequests[num];
                 reject(err);
@@ -154,16 +163,16 @@ async function startServer() {
         const num = number.replace(/[^0-9]/g, '');
         if (num.length < 5) return res.status(400).json({ error: 'Invalid phone number length' });
         
-        addLog(`Direct API pairing request for +${num}`, 'network');
+        addLog(`API pairing request for +${num}`, 'network');
         
         try {
             const code = await getPairingCode(num);
             res.setHeader('Content-Type', 'text/plain');
-            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
             res.send(code);
         } catch (e: any) {
             console.error('Pairing Error:', e);
-            res.status(500).send(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+            res.status(500).send(`${e instanceof Error ? e.message : 'Unknown error'}`);
         }
     });
 
@@ -174,12 +183,12 @@ async function startServer() {
         if (number) {
             const num = number.replace(/[^0-9]/g, '');
             if (num.length >= 5) {
-                addLog(`Direct root link pairing request for +${num}`, 'network');
+                addLog(`Root link pairing request for +${num}`, 'network');
                 try {
                     const code = await getPairingCode(num);
                     if (!res.headersSent) {
                         res.setHeader('Content-Type', 'text/plain');
-                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
                         return res.send(code);
                     }
                 } catch (e: any) {
@@ -188,8 +197,6 @@ async function startServer() {
                     }
                 }
                 return;
-            } else {
-                return res.status(400).send('Invalid phone number length');
             }
         }
         next();
@@ -256,9 +263,10 @@ async function startServer() {
                     io.emit('pairing-code', { phoneNumber, code });
                     pairingEvents.emit('code', { phoneNumber, code });
                     addLog(`PAIRING CODE for +${phoneNumber}: ${code}`, 'network');
-                } catch (e) {
+                } catch (e: any) {
                     addLog(`Pairing Error: ${e}`, 'error');
                     connectingStates[phoneNumber] = false;
+                    pairingEvents.emit('code', { phoneNumber, error: e?.message || String(e) });
                 }
             }, 3000);
         }
