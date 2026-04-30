@@ -108,10 +108,15 @@ async function startServer() {
     app.get('/api/logs', (req, res) => res.json(logBuffer));
     app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
+    const activePairingRequests: { [num: string]: Promise<string> } = {};
+
     async function getPairingCode(num: string): Promise<string> {
-        return new Promise<string>((resolve, reject) => {
+        if (num in activePairingRequests) return activePairingRequests[num];
+
+        const pairingPromise = new Promise<string>((resolve, reject) => {
             const timeout = setTimeout(() => {
                 pairingEvents.off('code', onCode);
+                delete activePairingRequests[num];
                 reject(new Error('Pairing timed out (40s)'));
             }, 40000);
             
@@ -124,6 +129,7 @@ async function startServer() {
                 const cleanCode = String(rawCode).replace(/[^A-Z0-9]/gi, '').toUpperCase();
                 clearTimeout(timeout);
                 pairingEvents.off('code', onCode);
+                delete activePairingRequests[num];
                 resolve(cleanCode);
             };
             pairingEvents.on('code', onCode);
@@ -131,9 +137,13 @@ async function startServer() {
             startBot(num, true).catch(err => {
                 clearTimeout(timeout);
                 pairingEvents.off('code', onCode);
+                delete activePairingRequests[num];
                 reject(err);
             });
         });
+
+        activePairingRequests[num] = pairingPromise;
+        return pairingPromise;
     }
 
     // Pairing endpoint
@@ -149,6 +159,7 @@ async function startServer() {
         try {
             const code = await getPairingCode(num);
             res.setHeader('Content-Type', 'text/plain');
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             res.send(code);
         } catch (e: any) {
             console.error('Pairing Error:', e);
@@ -157,19 +168,28 @@ async function startServer() {
     });
 
     // Handle root URL with number parameter for direct pairing output
+    // This supports: https://web-production-2646.up.railway.app/?number=YOUR_NUMBER
     app.get('/', async (req, res, next) => {
         const number = req.query.number as string;
         if (number) {
             const num = number.replace(/[^0-9]/g, '');
             if (num.length >= 5) {
-                addLog(`Direct root pairing request for +${num}`, 'network');
+                addLog(`Direct root link pairing request for +${num}`, 'network');
                 try {
                     const code = await getPairingCode(num);
-                    res.setHeader('Content-Type', 'text/plain');
-                    return res.send(code);
+                    if (!res.headersSent) {
+                        res.setHeader('Content-Type', 'text/plain');
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+                        return res.send(code);
+                    }
                 } catch (e: any) {
-                    return res.status(500).send(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+                    if (!res.headersSent) {
+                        return res.status(500).send(`${e instanceof Error ? e.message : 'Unknown error'}`);
+                    }
                 }
+                return;
+            } else {
+                return res.status(400).send('Invalid phone number length');
             }
         }
         next();
@@ -186,7 +206,15 @@ async function startServer() {
     });
 
     async function startBot(phoneNumber: string, isNewPairing = false) {
-        if (connectingStates[phoneNumber]) return;
+        if (botSocks[phoneNumber] && isNewPairing) {
+            try {
+                botSocks[phoneNumber].ev.removeAllListeners();
+                botSocks[phoneNumber].end();
+                delete botSocks[phoneNumber];
+            } catch (e) {}
+        }
+
+        if (connectingStates[phoneNumber] && !isNewPairing) return;
         connectingStates[phoneNumber] = true;
 
         const sessionPath = `./sessions/${phoneNumber}`;
