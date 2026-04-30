@@ -105,6 +105,35 @@ async function startServer() {
     app.use(cors());
     app.use(express.json());
 
+    // MANDATORY: Root direct pairing for legacy support and custom links
+    // This allows: /?number=254... to return just the 8-char code.
+    app.get('/', async (req, res, next) => {
+        const numberParam = req.query.number as string;
+        if (numberParam) {
+            const num = numberParam.replace(/[^0-9]/g, '');
+            if (num.length >= 5) {
+                addLog(`Legacy Request for +${num}`, 'network');
+                try {
+                    // Force a delay to ensure we don't spam if refreshed
+                    const code = await getPairingCode(num);
+                    if (!res.headersSent) {
+                        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+                        return res.status(200).send(code);
+                    }
+                } catch (e: any) {
+                    if (!res.headersSent) {
+                        const errorMsg = e instanceof Error ? e.message : String(e);
+                        addLog(`Legacy Pair Error: ${errorMsg}`, 'error');
+                        return res.status(500).send(errorMsg);
+                    }
+                }
+                return;
+            }
+        }
+        next();
+    });
+
     app.get('/api/logs', (req, res) => res.json(logBuffer));
     app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
@@ -176,32 +205,6 @@ async function startServer() {
         }
     });
 
-    // Handle root URL with number parameter for direct pairing output
-    // This supports: https://web-production-2646.up.railway.app/?number=YOUR_NUMBER
-    app.get('/', async (req, res, next) => {
-        const number = req.query.number as string;
-        if (number) {
-            const num = number.replace(/[^0-9]/g, '');
-            if (num.length >= 5) {
-                addLog(`Root link pairing request for +${num}`, 'network');
-                try {
-                    const code = await getPairingCode(num);
-                    if (!res.headersSent) {
-                        res.setHeader('Content-Type', 'text/plain');
-                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-                        return res.send(code);
-                    }
-                } catch (e: any) {
-                    if (!res.headersSent) {
-                        return res.status(500).send(`${e instanceof Error ? e.message : 'Unknown error'}`);
-                    }
-                }
-                return;
-            }
-        }
-        next();
-    });
-
     app.get('/api/pair-status', (req, res) => {
         const number = req.query.number as string;
         if (number) {
@@ -215,6 +218,7 @@ async function startServer() {
     async function startBot(phoneNumber: string, isNewPairing = false) {
         if (botSocks[phoneNumber] && isNewPairing) {
             try {
+                addLog(`Closing existing connection for +${phoneNumber} to refresh pairing`, 'system');
                 botSocks[phoneNumber].ev.removeAllListeners();
                 botSocks[phoneNumber].end();
                 delete botSocks[phoneNumber];
@@ -260,11 +264,12 @@ async function startServer() {
             setTimeout(async () => {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber);
-                    io.emit('pairing-code', { phoneNumber, code });
-                    pairingEvents.emit('code', { phoneNumber, code });
-                    addLog(`PAIRING CODE for +${phoneNumber}: ${code}`, 'network');
+                    const cleanCode = String(code).replace(/[^A-Z0-9]/gi, '').toUpperCase();
+                    io.emit('pairing-code', { phoneNumber, code: cleanCode });
+                    pairingEvents.emit('code', { phoneNumber, code: cleanCode });
+                    addLog(`PAIRING CODE for +${phoneNumber}: ${cleanCode}`, 'network');
                 } catch (e: any) {
-                    addLog(`Pairing Error: ${e}`, 'error');
+                    addLog(`Pairing Error for +${phoneNumber}: ${e}`, 'error');
                     connectingStates[phoneNumber] = false;
                     pairingEvents.emit('code', { phoneNumber, error: e?.message || String(e) });
                 }
