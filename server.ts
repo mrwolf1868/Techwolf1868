@@ -126,17 +126,19 @@ async function startServer() {
 
         botSocks[phoneNumber] = sock;
 
-        if (isNewPairing && !sock.authState.creds.registered) {
-            addLog(`Generating pairing code for +${phoneNumber}...`, 'network');
+        if (isNewPairing && !state.creds.registered) {
+            addLog(`Initializing pairing for +${phoneNumber}...`, 'network');
+            // Give the socket a moment to initialize before requesting code
             setTimeout(async () => {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber);
                     io.emit('pairing-code', code);
-                    addLog(`Pairing code generated: ${code}`, 'network');
+                    addLog(`PAIRING CODE: ${code}`, 'network');
                 } catch (e) {
-                    addLog(`Pairing error: ${e}`, 'error');
+                    addLog(`Pairing Error: ${e}`, 'error');
+                    connectingStates[phoneNumber] = false;
                 }
-            }, 3000);
+            }, 5000);
         }
 
         sock.ev.on('creds.update', saveCreds);
