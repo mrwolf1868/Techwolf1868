@@ -19,11 +19,15 @@ import moment from 'moment-timezone';
 import { createServer as createViteServer } from 'vite';
 import { Server } from 'socket.io';
 import { createServer } from 'http';
+import { EventEmitter } from 'events';
 import { handleCommand } from './src/commands.ts';
 import { getAIReply } from './src/ai.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const pairingEvents = new EventEmitter();
+pairingEvents.setMaxListeners(100);
 
 async function startServer() {
     const app = express();
@@ -104,11 +108,77 @@ async function startServer() {
     app.get('/api/logs', (req, res) => res.json(logBuffer));
     app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
+    // Pairing endpoint
+    app.get('/api/pair', async (req, res) => {
+        const number = req.query.number as string;
+        if (!number) return res.status(400).json({ error: 'Phone number required' });
+        
+        const num = number.replace(/[^0-9]/g, '');
+        if (num.length < 5) return res.status(400).json({ error: 'Invalid phone number length' });
+        
+        addLog(`Direct pairing request for +${num}`, 'network');
+        
+        try {
+            const code = await new Promise<string>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    pairingEvents.off('code', onCode);
+                    reject(new Error('Pairing timed out (40s)'));
+                }, 40000);
+                
+                const onCode = (data: any) => {
+                    const c = typeof data === 'string' ? data : data.code;
+                    const p = typeof data === 'string' ? null : data.phoneNumber;
+
+                    if (p && p !== num) return; 
+
+                    clearTimeout(timeout);
+                    pairingEvents.off('code', onCode);
+                    resolve(c);
+                };
+                pairingEvents.on('code', onCode);
+                
+                startBot(num, true).catch(err => {
+                    clearTimeout(timeout);
+                    pairingEvents.off('code', onCode);
+                    reject(err);
+                });
+            });
+            
+            res.setHeader('Content-Type', 'text/plain');
+            res.send(code);
+        } catch (e: any) {
+            console.error('Pairing Error:', e);
+            res.status(500).send(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+        }
+    });
+
+    app.get('/api/pair-status', (req, res) => {
+        const number = req.query.number as string;
+        if (number) {
+            const num = number.replace(/[^0-9]/g, '');
+            startBot(num, true);
+            return res.json({ status: 'pairing' });
+        }
+        res.status(400).send('Number required');
+    });
+
     async function startBot(phoneNumber: string, isNewPairing = false) {
         if (connectingStates[phoneNumber]) return;
         connectingStates[phoneNumber] = true;
 
         const sessionPath = `./sessions/${phoneNumber}`;
+        
+        if (isNewPairing) {
+            try {
+                if (fs.existsSync(sessionPath)) {
+                    await fs.remove(sessionPath);
+                    addLog(`Cleared existing session for +${phoneNumber} for new pairing`, 'system');
+                }
+            } catch (e) {
+                addLog(`Error clearing session: ${e}`, 'error');
+            }
+        }
+
         await fs.ensureDir(sessionPath);
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         const { version } = await fetchLatestBaileysVersion();
@@ -121,24 +191,25 @@ async function startServer() {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
             },
-            browser: ["TECHWIZARD", "Chrome", "1.1.0"]
+            browser: ["Ubuntu", "Chrome", "20.0.04"]
         });
 
         botSocks[phoneNumber] = sock;
 
         if (isNewPairing && !state.creds.registered) {
             addLog(`Initializing pairing for +${phoneNumber}...`, 'network');
-            // Give the socket a moment to initialize before requesting code
+            // Give the socket a slightly smaller moment to initialize
             setTimeout(async () => {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber);
-                    io.emit('pairing-code', code);
-                    addLog(`PAIRING CODE: ${code}`, 'network');
+                    io.emit('pairing-code', { phoneNumber, code });
+                    pairingEvents.emit('code', { phoneNumber, code });
+                    addLog(`PAIRING CODE for +${phoneNumber}: ${code}`, 'network');
                 } catch (e) {
                     addLog(`Pairing Error: ${e}`, 'error');
                     connectingStates[phoneNumber] = false;
                 }
-            }, 5000);
+            }, 3000);
         }
 
         sock.ev.on('creds.update', saveCreds);
@@ -249,18 +320,6 @@ async function startServer() {
                 }
             });
         }
-    });
-
-    // Pairing endpoint
-    app.get('/', (req, res, next) => {
-        const number = req.query.number as string;
-        if (number) {
-            const num = number.replace(/[^0-9]/g, '');
-            startBot(num, true);
-            return res.json({ status: 'pairing' });
-        }
-        // SPA Fallback handles standard routes
-        next();
     });
 }
 

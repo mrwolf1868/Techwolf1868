@@ -152,7 +152,7 @@ export const handleCommand = async (
             await sock.sendMessage(from, { text: `🧙‍♂️ *YOUR WA ID:* ${sender}\n*CHAT JID:* ${from}` });
             break;
         case 'link':
-            await sock.sendMessage(from, { text: `🧙‍♂️ *Session Link:* ${process.env.PUBLIC_URL || 'https://techwizard-bot.up.railway.app'}/?number=${phoneNumber}` });
+            await sock.sendMessage(from, { text: `🧙‍♂️ *Session Link:* ${process.env.PUBLIC_URL || 'https://ais-dev-nxvcb2rbkdkrbkltjwracn-92018233287.europe-west3.run.app'}/?number=${phoneNumber}` });
             break;
         case 'deploybot':
             await sock.sendMessage(from, { text: `🧙‍♂️ *Deploying TechWizard:* 100%. Visit Dashboard to manage.` });
