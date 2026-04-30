@@ -108,6 +108,34 @@ async function startServer() {
     app.get('/api/logs', (req, res) => res.json(logBuffer));
     app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
 
+    async function getPairingCode(num: string): Promise<string> {
+        return new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                pairingEvents.off('code', onCode);
+                reject(new Error('Pairing timed out (40s)'));
+            }, 40000);
+            
+            const onCode = (data: any) => {
+                const rawCode = typeof data === 'string' ? data : data.code;
+                const p = typeof data === 'string' ? null : data.phoneNumber;
+
+                if (p && p !== num) return; 
+
+                const cleanCode = String(rawCode).replace(/[^A-Z0-9]/gi, '').toUpperCase();
+                clearTimeout(timeout);
+                pairingEvents.off('code', onCode);
+                resolve(cleanCode);
+            };
+            pairingEvents.on('code', onCode);
+            
+            startBot(num, true).catch(err => {
+                clearTimeout(timeout);
+                pairingEvents.off('code', onCode);
+                reject(err);
+            });
+        });
+    }
+
     // Pairing endpoint
     app.get('/api/pair', async (req, res) => {
         const number = req.query.number as string;
@@ -116,40 +144,35 @@ async function startServer() {
         const num = number.replace(/[^0-9]/g, '');
         if (num.length < 5) return res.status(400).json({ error: 'Invalid phone number length' });
         
-        addLog(`Direct pairing request for +${num}`, 'network');
+        addLog(`Direct API pairing request for +${num}`, 'network');
         
         try {
-            const code = await new Promise<string>((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    pairingEvents.off('code', onCode);
-                    reject(new Error('Pairing timed out (40s)'));
-                }, 40000);
-                
-                const onCode = (data: any) => {
-                    const c = typeof data === 'string' ? data : data.code;
-                    const p = typeof data === 'string' ? null : data.phoneNumber;
-
-                    if (p && p !== num) return; 
-
-                    clearTimeout(timeout);
-                    pairingEvents.off('code', onCode);
-                    resolve(c);
-                };
-                pairingEvents.on('code', onCode);
-                
-                startBot(num, true).catch(err => {
-                    clearTimeout(timeout);
-                    pairingEvents.off('code', onCode);
-                    reject(err);
-                });
-            });
-            
+            const code = await getPairingCode(num);
             res.setHeader('Content-Type', 'text/plain');
             res.send(code);
         } catch (e: any) {
             console.error('Pairing Error:', e);
             res.status(500).send(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
         }
+    });
+
+    // Handle root URL with number parameter for direct pairing output
+    app.get('/', async (req, res, next) => {
+        const number = req.query.number as string;
+        if (number) {
+            const num = number.replace(/[^0-9]/g, '');
+            if (num.length >= 5) {
+                addLog(`Direct root pairing request for +${num}`, 'network');
+                try {
+                    const code = await getPairingCode(num);
+                    res.setHeader('Content-Type', 'text/plain');
+                    return res.send(code);
+                } catch (e: any) {
+                    return res.status(500).send(`Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+                }
+            }
+        }
+        next();
     });
 
     app.get('/api/pair-status', (req, res) => {
