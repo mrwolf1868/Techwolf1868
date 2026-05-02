@@ -194,23 +194,20 @@ async function startServer() {
                         if (!res.headersSent) {
                             const errorMsg = e instanceof Error ? e.message : String(e);
                             addLog(`Direct Link Error: ${errorMsg}`, 'error');
-                            res.status(500).json({ error: errorMsg === 'PAIRING_TIMEOUT' ? 'Timeout: Try again in a moment.' : errorMsg });
+                            res.setHeader('Content-Type', 'text/plain');
+                            return res.status(500).send(errorMsg === 'PAIRING_TIMEOUT' ? 'Timeout: Try again in a moment.' : errorMsg);
                         }
                     }
                     return;
                 } else {
                     if (!res.headersSent) {
-                        return res.status(400).json({ error: "Invalid number format. Use country code." });
+                        res.setHeader('Content-Type', 'text/plain');
+                        return res.status(400).send("Invalid number format. Use country code.");
                     }
                     return;
                 }
             }
             
-            // If no number param and it's an API-like request (Accept header), return JSON
-            if (req.headers.accept?.includes('application/json')) {
-                return res.json({ status: "wizard online", message: "Use ?number=... to get pairing code" });
-            }
-
             next();
         } catch (globalError) {
             console.error('Root Route Global Error:', globalError);
