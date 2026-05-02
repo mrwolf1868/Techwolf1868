@@ -11,6 +11,15 @@ import { downloadMediaMessage } from '@whiskeysockets/baileys';
 const afkUsers = new Map<string, { reason: string, time: number }>();
 const commandStats = { total: 0, startTime: Date.now() };
 
+const getLogo = () => {
+    try {
+        if (fs.existsSync('./input_file_0.png')) {
+            return fs.readFileSync('./input_file_0.png');
+        }
+    } catch (e) {}
+    return { url: 'https://i.ibb.co/6NKvzXh/avatar-default.png' };
+};
+
 export const handleCommand = async (
     sock: any, 
     mek: any, 
@@ -107,16 +116,16 @@ export const handleCommand = async (
     switch (command) {
         // --- SYSTEM ---
         case 'menu':
-            const logoBuffer = fs.readFileSync('./input_file_0.png');
+            const menuLogo = getLogo();
             await sock.sendMessage(from, { 
-                image: logoBuffer,
+                image: menuLogo,
                 caption: menuText,
                 contextInfo: {
                     externalAdReply: {
                         title: "TECHWIZARD COMMUNITY",
                         body: "Tap to Join Official Group",
                         mediaType: 1,
-                        thumbnail: logoBuffer,
+                        thumbnail: menuLogo instanceof Buffer ? menuLogo : undefined,
                         sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
                         renderLargerThumbnail: true
                     }
@@ -137,7 +146,7 @@ export const handleCommand = async (
             await sock.sendMessage(from, { text: `🏓 *Pong!* Speed: *${lat.toFixed(2)}s*` });
             break;
         case 'alive':
-            const aliveLogo = fs.readFileSync('./input_file_0.png');
+            const aliveLogo = getLogo();
             await sock.sendMessage(from, { 
                 image: aliveLogo,
                 caption: `🧙‍♂️ *TECHWIZARD IS ALIVE*\n\nRuntime: ${getUptime()}\nStatus: Online 🟢\nMode: ${settings.chatbot ? 'AI' : 'Public'}`,
@@ -146,7 +155,7 @@ export const handleCommand = async (
                         title: "TECHWIZARD STATUS",
                         body: "Online & Safe from Ban",
                         mediaType: 1,
-                        thumbnail: aliveLogo,
+                        thumbnail: aliveLogo instanceof Buffer ? aliveLogo : undefined,
                         sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
                         renderLargerThumbnail: false
                     }

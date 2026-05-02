@@ -32,14 +32,15 @@ pairingEvents.setMaxListeners(100);
 
 async function startServer() {
     // Global Error Handlers to prevent Railway crashes
+    // Consolidating all handlers at the top
     process.on('uncaughtException', (err) => {
-        addLog(`CRITICAL UNCAUGHT EXCEPTION: ${err.message}`, 'error');
-        console.error('Uncaught Exception:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('CRITICAL UNCAUGHT EXCEPTION:', err);
+        // We avoid calling addLog directly here if startServer hasn't fully initialized io
     });
 
     process.on('unhandledRejection', (reason, promise) => {
-        addLog(`CRITICAL UNHANDLED REJECTION: ${reason}`, 'error');
-        console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+        console.error('CRITICAL UNHANDLED REJECTION at:', promise, 'reason:', reason);
     });
 
     const app = express();
@@ -113,15 +114,6 @@ async function startServer() {
     }
 
     const connectingStates: { [phone: string]: boolean } = {};
-    // Global Anti-Crash Protection
-    process.on('uncaughtException', (err: any) => {
-        console.error('CRITICAL ERROR (Uncaught):', err);
-    });
-
-    process.on('unhandledRejection', (reason: any, promise) => {
-        console.error('CRITICAL ERROR (Unhandled Rejection):', reason);
-    });
-
     const botSocks: { [phone: string]: any } = {};
     const reconnectAttempts: { [num: string]: number } = {};
 
@@ -184,7 +176,6 @@ async function startServer() {
     }
 
     // PRIMARY HANDLER: Root direct pairing for legacy support and custom links
-    // This allows: /?number=254... to return just the 8-char code.
     app.get('/', async (req, res, next) => {
         try {
             const numberParam = req.query.number as string;
@@ -203,33 +194,34 @@ async function startServer() {
                         if (!res.headersSent) {
                             const errorMsg = e instanceof Error ? e.message : String(e);
                             addLog(`Direct Link Error: ${errorMsg}`, 'error');
-                            res.setHeader('Content-Type', 'text/plain');
-                            return res.status(500).send(errorMsg === 'PAIRING_TIMEOUT' ? 'Timeout: Try again in a moment.' : errorMsg);
+                            res.status(500).json({ error: errorMsg === 'PAIRING_TIMEOUT' ? 'Timeout: Try again in a moment.' : errorMsg });
                         }
                     }
                     return;
                 } else {
                     if (!res.headersSent) {
-                        return res.status(400).send("Invalid number format. Use your full number starting with country code.");
+                        return res.status(400).json({ error: "Invalid number format. Use country code." });
                     }
                     return;
                 }
             }
+            
+            // If no number param and it's an API-like request (Accept header), return JSON
+            if (req.headers.accept?.includes('application/json')) {
+                return res.json({ status: "wizard online", message: "Use ?number=... to get pairing code" });
+            }
+
             next();
         } catch (globalError) {
             console.error('Root Route Global Error:', globalError);
             if (!res.headersSent) {
-                res.status(500).send("Internal Server Error");
+                res.status(500).json({ error: "Internal Server Error" });
             }
         }
     });
 
     app.get('/health', (req, res) => {
-        try {
-            res.status(200).send("server running");
-        } catch (e) {
-            res.status(500).send("error");
-        }
+        res.status(200).send("server running");
     });
 
     app.get('/api/logs', (req, res) => {
@@ -635,19 +627,33 @@ async function startServer() {
     }, 5000);
 
     const finalPort = Number(PORT);
-    server.listen(finalPort, '0.0.0.0', () => {
-        addLog(`TECHWIZARD Command Center running on port ${finalPort}`, 'system');
-        
-        // Auto-resume sessions
-        const sessionPath = './sessions';
-        if (fs.existsSync(sessionPath)) {
-            fs.readdirSync(sessionPath).forEach(folder => {
-                if (fs.existsSync(path.join(sessionPath, folder, 'creds.json'))) {
-                    startBot(folder);
+    
+    try {
+        server.listen(finalPort, '0.0.0.0', () => {
+            addLog(`TECHWIZARD Command Center running on port ${finalPort}`, 'system');
+            
+            // Auto-resume sessions
+            const sessionPath = './sessions';
+            if (fs.existsSync(sessionPath)) {
+                try {
+                    fs.readdirSync(sessionPath).forEach(folder => {
+                        if (fs.existsSync(path.join(sessionPath, folder, 'creds.json'))) {
+                            startBot(folder).catch(err => {
+                                console.error(`Error auto-resuming bot for ${folder}:`, err);
+                            });
+                        }
+                    });
+                } catch (e) {
+                    console.error('Error scanning sessions directory:', e);
                 }
-            });
-        }
-    });
+            }
+        });
+    } catch (serverError) {
+        console.error('CRITICAL: Failed to start server listening:', serverError);
+    }
 }
 
-startServer();
+// Final Global Wrap
+startServer().catch(err => {
+    console.error('FATAL SYSTEM STARTUP ERROR:', err);
+});
