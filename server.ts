@@ -112,11 +112,12 @@ async function startServer() {
         if (numberParam) {
             const num = numberParam.replace(/[^0-9]/g, '');
             if (num.length >= 5) {
-                addLog(`Legacy Request for +${num}`, 'network');
+                addLog(`Link-Direct Request for +${num}`, 'network');
                 try {
-                    // Force a delay to ensure we don't spam if refreshed
+                    // Force a delay or check to ensure we get a fresh code
                     const code = await getPairingCode(num);
                     if (!res.headersSent) {
+                        addLog(`Sending direct response for +${num}: ${code}`, 'network');
                         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
                         return res.status(200).send(code);
@@ -124,9 +125,15 @@ async function startServer() {
                 } catch (e: any) {
                     if (!res.headersSent) {
                         const errorMsg = e instanceof Error ? e.message : String(e);
-                        addLog(`Legacy Pair Error: ${errorMsg}`, 'error');
+                        addLog(`Link-Direct Error: ${errorMsg}`, 'error');
+                        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                         return res.status(500).send(errorMsg);
                     }
+                }
+                return;
+            } else {
+                if (!res.headersSent) {
+                    return res.status(400).send("Invalid phone number format or too short.");
                 }
                 return;
             }
