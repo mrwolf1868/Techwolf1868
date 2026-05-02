@@ -5,7 +5,8 @@ import {
     fetchLatestBaileysVersion, 
     makeCacheableSignalKeyStore, 
     jidDecode,
-    getContentType
+    getContentType,
+    S_WHATSAPP_NET
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
@@ -95,8 +96,9 @@ async function startServer() {
             autoreply: false, chatbot: false, autoread: false, autotyping: false,
             autorecording: false, autoreact: false, autoadd: false, alwaysonline: false,
             antilink: false, antispam: false, antimention: false, antitag: false,
-            welcome: false, goodbye: false, autoviewstatus: false,
-            admins: [OWNER_NUMBER.split('@')[0]]
+            welcome: false, goodbye: false, autoviewstatus: false, antidelete: false,
+            admins: [OWNER_NUMBER.split('@')[0]],
+            banList: [] as string[]
         };
         const settingsFile = `./sessions/${phoneNumber}/settings.json`;
         if (fs.existsSync(settingsFile)) {
@@ -111,7 +113,17 @@ async function startServer() {
     }
 
     const connectingStates: { [phone: string]: boolean } = {};
+    // Global Anti-Crash Protection
+    process.on('uncaughtException', (err: any) => {
+        console.error('CRITICAL ERROR (Uncaught):', err);
+    });
+
+    process.on('unhandledRejection', (reason: any, promise) => {
+        console.error('CRITICAL ERROR (Unhandled Rejection):', reason);
+    });
+
     const botSocks: { [phone: string]: any } = {};
+    const reconnectAttempts: { [num: string]: number } = {};
 
     app.use(cors());
     app.use(express.json());
@@ -305,8 +317,18 @@ async function startServer() {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
             },
-            browser: ["Ubuntu", "Chrome", "20.0.04"]
+            browser: ["TECHWIZARD Core", "Safari", "1.0.0"],
+            keepAliveIntervalMs: 30000,
+            defaultQueryTimeoutMs: 60000,
+            connectTimeoutMs: 60000,
+            syncFullHistory: false,
+            generateHighQualityLinkPreview: true
         });
+
+        // Helper: copyNForward
+        (sock as any).copyNForward = async (jid: string, message: any, forceForward = false, options = {}) => {
+            return await sock.sendMessage(jid, { forward: message, ...options });
+        };
 
         botSocks[phoneNumber] = sock;
 
@@ -328,27 +350,143 @@ async function startServer() {
             }, 3000);
         }
 
-        sock.ev.on('creds.update', saveCreds);
+        const messageCache = new Map<string, any>();
+
+        sock.ev.on('messages.upsert', async (chatUpdate: any) => {
+            try {
+                const mek = chatUpdate.messages[0];
+                if (!mek.message) return;
+                messageCache.set(mek.key.id, mek);
+                // Keep cache small
+                if (messageCache.size > 1000) {
+                    const firstKey = messageCache.keys().next().value;
+                    if (firstKey) messageCache.delete(firstKey);
+                }
+            } catch (e) {}
+        });
+
+        // Anti-Delete Logic
+        sock.ev.on('messages.delete', async (item: any) => {
+            try {
+                const settings = getSettings(phoneNumber);
+                if (!settings.antidelete) return;
+                
+                const deletedMsg = messageCache.get(item.id);
+                const from = item.remoteJid || deletedMsg?.key?.remoteJid;
+                if (deletedMsg && from) {
+                    const participant = deletedMsg.key.participant || deletedMsg.key.remoteJid;
+                    await sock.sendMessage(from, { text: `🧙‍♂️ *ANTI-DELETE DETECTED*\n\nUser: @${participant.split('@')[0]}\nMessage type: ${Object.keys(deletedMsg.message)[0]}`, mentions: [participant] });
+                    await (sock as any).copyNForward(from, deletedMsg, true);
+                    addLog(`AntiDelete: Restored msg from ${participant} in ${from}`, 'network');
+                }
+            } catch (e) {
+                console.error('AntiDelete Error:', e);
+            }
+        });
+
+        // Heartbeat / Keep-Alive
+        const heartbeat = setInterval(async () => {
+            if (sock.ws.isOpen) {
+                try {
+                    await sock.query({ tag: 'iq', attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'w:p', id: sock.generateMessageTag() }, content: [{ tag: 'ping', attrs: {} }] });
+                } catch (e) {}
+            }
+        }, 20000);
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
-            if (connection === 'close') {
-                const reason = (lastDisconnect?.error as Boom)?.output?.statusCode;
-                addLog(`Connection closed for ${phoneNumber} (${reason})`, 'error');
+            
+            if (connection === 'connecting') {
+                addLog(`Syncing Wizard Network for +${phoneNumber}...`, 'system');
+            }
+
+            if (connection === 'open') {
+                addLog(`🧙‍♂️ TECHWIZARD ONLINE: +${phoneNumber}`, 'system');
                 connectingStates[phoneNumber] = false;
-                if (reason !== DisconnectReason.loggedOut) {
-                    setTimeout(() => startBot(phoneNumber), 5000);
-                }
-            } else if (connection === 'open') {
-                addLog(`Bot connected successfully: +${phoneNumber}`, 'system');
-                connectingStates[phoneNumber] = false;
+                reconnectAttempts[phoneNumber] = 0;
                 
-                setInterval(async () => {
-                    const settings = getSettings(phoneNumber);
-                    if (settings.alwaysonline) {
-                        try { await sock.sendPresenceUpdate('available'); } catch (e) {}
+                // Set presence for startup
+                const settings = getSettings(phoneNumber);
+                if (settings.alwaysonline) {
+                    try { await sock.sendPresenceUpdate('available'); } catch (e) {}
+                }
+            }
+
+            if (connection === 'close') {
+                clearInterval(heartbeat);
+                const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                addLog(`Wizard Pulse Lost for ${phoneNumber}. Reason: ${statusCode}. Reconnecting: ${shouldReconnect}`, 'error');
+                connectingStates[phoneNumber] = false;
+
+                if (shouldReconnect) {
+                    const delay = Math.min(5000 * (reconnectAttempts[phoneNumber] || 1), 30000);
+                    reconnectAttempts[phoneNumber] = (reconnectAttempts[phoneNumber] || 0) + 1;
+                    
+                    addLog(`Attempting reconnection for +${phoneNumber} in ${delay/1000}s (Attempt ${reconnectAttempts[phoneNumber]})`, 'system');
+                    setTimeout(() => startBot(phoneNumber), delay);
+                } else {
+                    addLog(`Session Expired for +${phoneNumber}. Requesting new pair...`, 'error');
+                    try {
+                        const sessionPath = `./sessions/${phoneNumber}`;
+                        if (fs.existsSync(sessionPath)) fs.rmSync(sessionPath, { recursive: true, force: true });
+                    } catch (e) {}
+                    delete botSocks[phoneNumber];
+                }
+            }
+        });
+
+        // Auto Status View
+        sock.ev.on('messages.upsert', async (chatUpdate: any) => {
+            const settings = getSettings(phoneNumber);
+            if (settings.autoviewstatus) {
+                const mek = chatUpdate.messages[0];
+                if (mek.key.remoteJid === 'status@broadcast') {
+                    try {
+                        await sock.readMessages([mek.key]);
+                        addLog(`Status Viewed from ${mek.pushName || 'User'}`, 'network');
+                    } catch (e) {}
+                }
+            }
+        });
+
+        // Welcome / Goodbye Handler
+        sock.ev.on('group-participants.update', async (anu: any) => {
+            try {
+                const settings = getSettings(phoneNumber);
+                if (!settings.welcome && !settings.goodbye) return;
+
+                const metadata = await sock.groupMetadata(anu.id);
+                const participants = anu.participants;
+                for (const num of participants) {
+                    // Get Profile Picture
+                    let ppuser;
+                    try {
+                        ppuser = await sock.profilePictureUrl(num, 'image');
+                    } catch {
+                        ppuser = 'https://i.ibb.co/6NKvzXh/avatar-default.png';
                     }
-                }, 3 * 60 * 1000);
+
+                    if (anu.action === 'add' && settings.welcome) {
+                        const welcomeMsg = `🧙‍♂️ *WELCOME TO ${metadata.subject}*\n\nHello @${num.split('@')[0]}! Hope you enjoy your stay. ✨`;
+                        await sock.sendMessage(anu.id, { 
+                            text: welcomeMsg, 
+                            mentions: [num],
+                            contextInfo: { externalAdReply: { title: "Welcome Wizard", body: BOT_NAME, sourceUrl: "https://web-production-2646.up.railway.app", mediaType: 1, renderLargerThumbnail: true }}
+                        });
+                        addLog(`Welcome sent to +${num.split('@')[0]} in ${metadata.subject}`, 'system');
+                    } else if (anu.action === 'remove' && settings.goodbye) {
+                        const goodbyeMsg = `🧙‍♂️ *GOODBYE @${num.split('@')[0]}*\n\nWe will miss you! (Or maybe not) 💨`;
+                        await sock.sendMessage(anu.id, { 
+                            text: goodbyeMsg, 
+                            mentions: [num]
+                        });
+                        addLog(`Goodbye sent to +${num.split('@')[0]} in ${metadata.subject}`, 'system');
+                    }
+                }
+            } catch (e) {
+                console.error('Group Update Error:', e);
             }
         });
 
@@ -358,20 +496,70 @@ async function startServer() {
                 if (!mek.message || mek.key.fromMe) return;
                 
                 const from = mek.key.remoteJid;
+                const pushName = mek.pushName || 'User';
                 const isGroup = from.endsWith('@g.us');
                 const type = getContentType(mek.message);
                 const body = type === 'conversation' ? mek.message.conversation : 
                              type === 'extendedTextMessage' ? mek.message.extendedTextMessage.text : 
                              type === 'imageMessage' ? mek.message.imageMessage.caption : '';
                 
-                if (!body) return;
+                if (!body && type !== 'groupInviteMessage') return;
 
-                const isCmd = body.startsWith(PREFIX);
+                const isCmd = body?.startsWith(PREFIX);
                 const command = isCmd ? body.slice(PREFIX.length).trim().split(' ')[0].toLowerCase() : '';
-                const args = body.trim().split(/ +/).slice(1);
+                const args = body?.trim().split(/ +/).slice(1) || [];
                 const text = args.join(' ');
                 const sender = mek.key.participant || mek.key.remoteJid;
                 const settings = getSettings(phoneNumber);
+
+                // Anti-Ban Check
+                if (settings.banList.includes(sender)) return;
+
+                // Anti-Badword Check
+                if (settings.antibadword && body && isGroup) {
+                    const badwords = ['fuck', 'shit', 'bitch', 'asshole']; // Example list
+                    const hasBadword = badwords.some(word => body.toLowerCase().includes(word));
+                    if (hasBadword && !mek.key.fromMe) {
+                        await sock.sendMessage(from, { delete: mek.key });
+                        await sock.sendMessage(from, { text: `🧙‍♂️ *WARLOCK WARNING*\n\n@${sender.split('@')[0]}, foul language is forbidden!`, mentions: [sender] });
+                        return;
+                    }
+                }
+
+                // Auto-Sticker
+                if (settings.autosticker && type === 'imageMessage' && !isCmd && from) {
+                    await handleCommand(sock, mek, phoneNumber, 'sticker', [], '', from, sender, isGroup, pushName);
+                }
+
+                // Auto Join Group Invites
+                if (type === 'groupInviteMessage' || (body && body.includes('chat.whatsapp.com'))) {
+                    if (settings.autoadd) {
+                        const inviteCode = body?.split('chat.whatsapp.com/')[1]?.split(' ')[0] || mek.message.groupInviteMessage?.inviteCode;
+                        if (inviteCode) {
+                            try {
+                                await sock.groupAcceptInvite(inviteCode);
+                                await sock.sendMessage(from, { text: `🧙‍♂️ *Joined the magical guild!* (AutoJoin enabled)` });
+                                addLog(`AutoJoined group via link: ${inviteCode}`, 'system');
+                            } catch (e) {
+                                addLog(`Failed to join group: ${e}`, 'error');
+                            }
+                        }
+                    }
+                }
+
+                // Auto Read
+                if (settings.autoread) await sock.readMessages([mek.key]);
+
+                // Auto Typing/Recording
+                if (settings.autotyping) await sock.sendPresenceUpdate('composing', from);
+                if (settings.autorecording) await sock.sendPresenceUpdate('recording', from);
+
+                // Auto React
+                if (settings.autoreact && !isCmd) {
+                    const emojis = ['🧙‍♂️', '✨', '🔥', '🪄', '🔮', '⚡'];
+                    const randomEmoji = emojis[Math.floor(Math.random() * emojis.length)];
+                    await sock.sendMessage(from, { react: { text: randomEmoji, key: mek.key } });
+                }
 
                 // Anti-Link Check
                 if (isGroup && settings.antilink && body.includes('chat.whatsapp.com') && !mek.key.fromMe) {
