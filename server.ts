@@ -30,12 +30,23 @@ const pairingEvents = new EventEmitter();
 pairingEvents.setMaxListeners(100);
 
 async function startServer() {
+    // Global Error Handlers to prevent Railway crashes
+    process.on('uncaughtException', (err) => {
+        addLog(`CRITICAL UNCAUGHT EXCEPTION: ${err.message}`, 'error');
+        console.error('Uncaught Exception:', err);
+    });
+
+    process.on('unhandledRejection', (reason, promise) => {
+        addLog(`CRITICAL UNHANDLED REJECTION: ${reason}`, 'error');
+        console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    });
+
     const app = express();
     const server = createServer(app);
     const io = new Server(server, {
         cors: { origin: '*' }
     });
-    const PORT = 3000;
+    const PORT = process.env.PORT || 3000;
 
     const OWNER_NUMBER = process.env.OWNER_NUMBER || '254111967697';
     const BOT_NAME = process.env.BOT_NAME || 'TECHWIZARD';
@@ -105,56 +116,20 @@ async function startServer() {
     app.use(cors());
     app.use(express.json());
 
-    // MANDATORY: Root direct pairing for legacy support and custom links
-    // This allows: /?number=254... to return just the 8-char code.
-    app.get('/', async (req, res, next) => {
-        const numberParam = req.query.number as string;
-        if (numberParam) {
-            const num = numberParam.replace(/[^0-9]/g, '');
-            if (num.length >= 5) {
-                addLog(`Link-Direct Request for +${num}`, 'network');
-                try {
-                    // Force a delay or check to ensure we get a fresh code
-                    const code = await getPairingCode(num);
-                    if (!res.headersSent) {
-                        addLog(`Sending direct response for +${num}: ${code}`, 'network');
-                        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-                        return res.status(200).send(code);
-                    }
-                } catch (e: any) {
-                    if (!res.headersSent) {
-                        const errorMsg = e instanceof Error ? e.message : String(e);
-                        addLog(`Link-Direct Error: ${errorMsg}`, 'error');
-                        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                        return res.status(500).send(errorMsg);
-                    }
-                }
-                return;
-            } else {
-                if (!res.headersSent) {
-                    return res.status(400).send("Invalid phone number format or too short.");
-                }
-                return;
-            }
-        }
-        next();
-    });
-
-    app.get('/api/logs', (req, res) => res.json(logBuffer));
-    app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
-
     const activePairingRequests: { [num: string]: Promise<string> } = {};
 
     async function getPairingCode(num: string): Promise<string> {
-        if (num in activePairingRequests) return activePairingRequests[num];
+        if (num in activePairingRequests) {
+            addLog(`Using existing pairing promise for +${num}`, 'network');
+            return activePairingRequests[num];
+        }
 
         const pairingPromise = new Promise<string>((resolve, reject) => {
             const timeoutId = setTimeout(() => {
                 pairingEvents.off('code', onCode);
                 delete activePairingRequests[num];
-                reject(new Error('Pairing timed out (45s)'));
-            }, 45000);
+                reject(new Error('PAIRING_TIMEOUT'));
+            }, 50000); // Increased to 50s for stability
             
             const onCode = (data: any) => {
                 const p = typeof data === 'string' ? null : data.phoneNumber;
@@ -190,6 +165,76 @@ async function startServer() {
         activePairingRequests[num] = pairingPromise;
         return pairingPromise;
     }
+
+    // PRIMARY HANDLER: Root direct pairing for legacy support and custom links
+    // This allows: /?number=254... to return just the 8-char code.
+    app.get('/', async (req, res, next) => {
+        try {
+            const numberParam = req.query.number as string;
+            if (numberParam) {
+                const num = numberParam.replace(/[^0-9]/g, '');
+                if (num.length >= 5) {
+                    try {
+                        addLog(`DIRECT LINK Pairing: +${num}`, 'network');
+                        const code = await getPairingCode(num);
+                        if (!res.headersSent) {
+                            res.setHeader('Content-Type', 'text/plain');
+                            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+                            return res.status(200).send(code);
+                        }
+                    } catch (e: any) {
+                        if (!res.headersSent) {
+                            const errorMsg = e instanceof Error ? e.message : String(e);
+                            addLog(`Direct Link Error: ${errorMsg}`, 'error');
+                            res.setHeader('Content-Type', 'text/plain');
+                            return res.status(500).send(errorMsg === 'PAIRING_TIMEOUT' ? 'Timeout: Try again in a moment.' : errorMsg);
+                        }
+                    }
+                    return;
+                } else {
+                    if (!res.headersSent) {
+                        return res.status(400).send("Invalid number format. Use your full number starting with country code.");
+                    }
+                    return;
+                }
+            }
+            next();
+        } catch (globalError) {
+            console.error('Root Route Global Error:', globalError);
+            if (!res.headersSent) {
+                res.status(500).send("Internal Server Error");
+            }
+        }
+    });
+
+    app.get('/health', (req, res) => {
+        try {
+            res.status(200).send("server running");
+        } catch (e) {
+            res.status(500).send("error");
+        }
+    });
+
+    app.get('/api/logs', (req, res) => {
+        try {
+            res.json(logBuffer);
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to fetch logs' });
+        }
+    });
+
+    app.get('/api/health', (req, res) => {
+        try {
+            res.json({ 
+                status: 'ok', 
+                uptime: process.uptime(),
+                node_version: process.version,
+                memory: process.memoryUsage()
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'Health check failed' });
+        }
+    });
 
     // Pairing endpoint
     app.get('/api/pair', async (req, res) => {
@@ -379,8 +424,9 @@ async function startServer() {
         });
     }, 5000);
 
-    server.listen(PORT, '0.0.0.0', () => {
-        addLog(`TECHWIZARD Command Center running on port ${PORT}`, 'system');
+    const finalPort = Number(PORT);
+    server.listen(finalPort, '0.0.0.0', () => {
+        addLog(`TECHWIZARD Command Center running on port ${finalPort}`, 'system');
         
         // Auto-resume sessions
         const sessionPath = './sessions';
