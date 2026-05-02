@@ -156,10 +156,12 @@ async function startServer() {
                 if (!rawCode) return;
 
                 const cleanCode = String(rawCode).replace(/[^A-Z0-9]/gi, '').toUpperCase();
+                const formattedCode = cleanCode.length === 8 ? `${cleanCode.slice(0, 4)}-${cleanCode.slice(4)}` : cleanCode;
+                
                 clearTimeout(timeoutId);
                 pairingEvents.off('code', onCode);
                 delete activePairingRequests[num];
-                resolve(cleanCode);
+                resolve(formattedCode);
             };
             pairingEvents.on('code', onCode);
             
@@ -333,9 +335,11 @@ async function startServer() {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber);
                     const cleanCode = String(code).replace(/[^A-Z0-9]/gi, '').toUpperCase();
-                    io.emit('pairing-code', { phoneNumber, code: cleanCode });
-                    pairingEvents.emit('code', { phoneNumber, code: cleanCode });
-                    addLog(`PAIRING CODE for +${phoneNumber}: ${cleanCode}`, 'network');
+                    const formattedCode = cleanCode.length === 8 ? `${cleanCode.slice(0, 4)}-${cleanCode.slice(4)}` : cleanCode;
+                    
+                    io.emit('pairing-code', { phoneNumber, code: formattedCode });
+                    pairingEvents.emit('code', { phoneNumber, code: formattedCode });
+                    addLog(`PAIRING CODE for +${phoneNumber}: ${formattedCode}`, 'network');
                 } catch (e: any) {
                     addLog(`Pairing Error for +${phoneNumber}: ${e}`, 'error');
                     connectingStates[phoneNumber] = false;
