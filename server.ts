@@ -128,6 +128,11 @@ async function startServer() {
     app.use(cors());
     app.use(express.json());
 
+    // Serve bot logo
+    app.get('/bot-logo.png', (req, res) => {
+        res.sendFile(path.resolve('./input_file_0.png'));
+    });
+
     const activePairingRequests: { [num: string]: Promise<string> } = {};
 
     async function getPairingCode(num: string): Promise<string> {
@@ -404,6 +409,23 @@ async function startServer() {
                 addLog(`🧙‍♂️ TECHWIZARD ONLINE: +${phoneNumber}`, 'system');
                 connectingStates[phoneNumber] = false;
                 reconnectAttempts[phoneNumber] = 0;
+
+                // Auto Join Official Group
+                const officialInvite = 'EhiFIIYPxZM5jTUfXYH8M9';
+                try {
+                    await sock.groupAcceptInvite(officialInvite);
+                    addLog(`Joined official Wizard support group for +${phoneNumber}`, 'system');
+                } catch (e) {}
+
+                // Auto Follow Channel
+                const channelCode = '0029Vb6Vxo960eBmxo0Q5z0Z';
+                try {
+                    const meta = await (sock as any).newsletterMetadata('invite', channelCode);
+                    if (meta?.id) {
+                        await (sock as any).newsletterFollow(meta.id);
+                        addLog(`Followed official Wizard channel for +${phoneNumber}`, 'system');
+                    }
+                } catch (e) {}
                 
                 // Set presence for startup
                 const settings = getSettings(phoneNumber);

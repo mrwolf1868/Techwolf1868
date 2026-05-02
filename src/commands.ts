@@ -2,6 +2,7 @@ import { getAIReply, resetAI, translate } from './ai.ts';
 import moment from 'moment-timezone';
 import axios from 'axios';
 import QRCode from 'qrcode';
+import fs from 'fs';
 // @ts-ignore
 import yts from 'yt-search';
 import { Sticker, StickerTypes } from 'wa-sticker-formatter';
@@ -106,9 +107,20 @@ export const handleCommand = async (
     switch (command) {
         // --- SYSTEM ---
         case 'menu':
+            const logoBuffer = fs.readFileSync('./input_file_0.png');
             await sock.sendMessage(from, { 
-                image: { url: 'https://i.ibb.co/6NKvzXh/avatar-default.png' },
-                caption: menuText 
+                image: logoBuffer,
+                caption: menuText,
+                contextInfo: {
+                    externalAdReply: {
+                        title: "TECHWIZARD COMMUNITY",
+                        body: "Tap to Join Official Group",
+                        mediaType: 1,
+                        thumbnail: logoBuffer,
+                        sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
+                        renderLargerThumbnail: true
+                    }
+                }
             });
             break;
         case 'help':
@@ -125,7 +137,21 @@ export const handleCommand = async (
             await sock.sendMessage(from, { text: `🏓 *Pong!* Speed: *${lat.toFixed(2)}s*` });
             break;
         case 'alive':
-            await sock.sendMessage(from, { text: `🧙‍♂️ *TECHWIZARD IS ALIVE*\n\nRuntime: ${getUptime()}\nStatus: Online 🟢\nMode: ${settings.chatbot ? 'AI' : 'Public'}` });
+            const aliveLogo = fs.readFileSync('./input_file_0.png');
+            await sock.sendMessage(from, { 
+                image: aliveLogo,
+                caption: `🧙‍♂️ *TECHWIZARD IS ALIVE*\n\nRuntime: ${getUptime()}\nStatus: Online 🟢\nMode: ${settings.chatbot ? 'AI' : 'Public'}`,
+                contextInfo: {
+                    externalAdReply: {
+                        title: "TECHWIZARD STATUS",
+                        body: "Online & Safe from Ban",
+                        mediaType: 1,
+                        thumbnail: aliveLogo,
+                        sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
+                        renderLargerThumbnail: false
+                    }
+                }
+            });
             break;
         case 'runtime':
             await sock.sendMessage(from, { text: `🧙‍♂️ *Runtime:* ${getUptime()}` });
@@ -435,6 +461,7 @@ export const handleCommand = async (
             break;
         case 'quote':
             if (!text) return sock.sendMessage(from, { text: 'Usage: .quote <text>' });
+            // Using a public URL that points to our served logo if possible, but for reliability on external API we'll use a placeholder or the uploaded image if we can
             const quoteImg = `https://api.vreden.my.id/api/canvas/quote?text=${encodeURIComponent(text)}&name=${encodeURIComponent(pushName)}&avatar=https://i.ibb.co/6NKvzXh/avatar-default.png`;
             await sock.sendMessage(from, { image: { url: quoteImg }, caption: '🧙‍♂️ Aesthetic Quote Generated.' });
             break;
