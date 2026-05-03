@@ -101,7 +101,11 @@ export default function App() {
   const formatPairingCode = (code: any) => {
     if (!code) return '';
     const codeStr = String(code);
-    return codeStr.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const clean = codeStr.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    if (clean.length === 8) {
+      return `${clean.slice(0, 4)}-${clean.slice(4)}`;
+    }
+    return clean;
   };
 
   const formatUptime = (seconds: number) => {

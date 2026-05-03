@@ -205,6 +205,20 @@ async function startServer() {
 
     app.get('/health', (req, res) => res.status(200).send("server running"));
 
+    // Production API endpoint for the frontend
+    app.get('/api/pair', async (req, res) => {
+        const number = (req.query.number as string) || process.env.NUMBER;
+        if (!number) return res.status(400).send('Phone number required');
+        const num = number.replace(/[^0-9]/g, '');
+        try {
+            const code = await getPairingCode(num);
+            res.setHeader('Content-Type', 'text/plain');
+            res.send(code);
+        } catch (e: any) {
+            res.status(500).send(e.message);
+        }
+    });
+
     app.get('/pair', async (req, res) => {
         const number = (req.query.number as string) || process.env.NUMBER;
         if (!number) return res.status(400).json({ error: 'Phone number required' });
@@ -254,6 +268,36 @@ async function startServer() {
             markOnlineOnConnect: false,
             defaultQueryTimeoutMs: 0
         });
+
+        // Helper for stable forwarding
+        (sock as any).copyNForward = async (jid: string, message: any, forceForward = false, options = {}) => {
+            let vtype: string | undefined;
+            if (options && typeof options === 'object' && 'readViewOnce' in options && options.readViewOnce) {
+                message.message = message.message && message.message.viewOnceMessage && message.message.viewOnceMessage.message ? message.message.viewOnceMessage.message : message.message;
+                vtype = Object.keys(message.message)[0];
+                delete message.message[vtype].viewOnce;
+                message.message = {
+                    [vtype]: {
+                        ...message.message[vtype]
+                    }
+                };
+            }
+
+            let mtype = Object.keys(message.message)[0];
+            let content = await (sock as any).generateForwardMessageContent(message, forceForward);
+            let ctype = Object.keys(content)[0];
+            let context = {};
+            if (mtype != "conversation") context = message.message[mtype].contextInfo;
+            content[ctype].contextInfo = {
+                ...context,
+                ...content[ctype].contextInfo
+            };
+            const waMessage = await (sock as any).prepareWAMessageMedia(content[ctype], { upload: sock.waUploadToServer });
+            return await sock.sendMessage(jid, { 
+                forward: message,
+                ...options
+            }, { quoted: message });
+        };
 
         botSocks[phoneNumber] = sock;
 
@@ -391,7 +435,7 @@ async function startServer() {
                 if (deletedMsg && from) {
                     const participant = deletedMsg.key.participant || deletedMsg.key.remoteJid;
                     await sock.sendMessage(from, { text: `🧙‍♂️ *ANTI-DELETE DETECTED*\n\nUser: @${participant.split('@')[0]}\nMessage type: ${Object.keys(deletedMsg.message)[0]}`, mentions: [participant] });
-                    await sock.sendMessage(from, { forward: deletedMsg }, { quoted: deletedMsg });
+                    await (sock as any).copyNForward(from, deletedMsg, true);
                 }
             } catch (e) {}
         });
