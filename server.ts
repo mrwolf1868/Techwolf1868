@@ -223,6 +223,33 @@ async function startServer() {
         res.status(200).send("server running");
     });
 
+    // NEW PRODUCTION ENDPOINT: /pair?number=xxxx
+    app.get('/pair', async (req, res) => {
+        const number = req.query.number as string;
+        if (!number) return res.status(400).json({ error: 'Phone number required' });
+        
+        const num = number.replace(/[^0-9]/g, '');
+        if (num.length < 5) return res.status(400).json({ error: 'Invalid phone number length' });
+        
+        addLog(`Production Pairing Request: +${num}`, 'network');
+        
+        try {
+            const code = await getPairingCode(num);
+            res.json({ 
+                success: true,
+                phoneNumber: num,
+                code: code,
+                message: "Enter this code on your WhatsApp linkage screen"
+            });
+        } catch (e: any) {
+            const msg = e instanceof Error ? e.message : String(e);
+            res.status(500).json({ 
+                success: false, 
+                error: msg === 'PAIRING_TIMEOUT' ? 'WhatsApp pairing timed out. Please try again.' : msg 
+            });
+        }
+    });
+
     app.get('/api/logs', (req, res) => {
         try {
             res.json(logBuffer);
@@ -330,9 +357,14 @@ async function startServer() {
 
         if (isNewPairing && !state.creds.registered) {
             addLog(`Initializing pairing for +${phoneNumber}...`, 'network');
-            // Give the socket a slightly smaller moment to initialize
+            // Give the socket a moment to initialize
             setTimeout(async () => {
                 try {
+                    // Check if socket is still active
+                    if (!sock.ws.isOpen && !sock.ws.isConnecting) {
+                        throw new Error('Socket closed before pairing');
+                    }
+                    
                     const code = await sock.requestPairingCode(phoneNumber);
                     const cleanCode = String(code).replace(/[^A-Z0-9]/gi, '').toUpperCase();
                     const formattedCode = cleanCode.length === 8 ? `${cleanCode.slice(0, 4)}-${cleanCode.slice(4)}` : cleanCode;
@@ -341,11 +373,12 @@ async function startServer() {
                     pairingEvents.emit('code', { phoneNumber, code: formattedCode });
                     addLog(`PAIRING CODE for +${phoneNumber}: ${formattedCode}`, 'network');
                 } catch (e: any) {
-                    addLog(`Pairing Error for +${phoneNumber}: ${e}`, 'error');
+                    const errorMsg = e?.message || String(e);
+                    addLog(`Pairing Error for +${phoneNumber}: ${errorMsg}`, 'error');
                     connectingStates[phoneNumber] = false;
-                    pairingEvents.emit('code', { phoneNumber, error: e?.message || String(e) });
+                    pairingEvents.emit('code', { phoneNumber, error: errorMsg });
                 }
-            }, 3000);
+            }, 3500);
         }
 
         const messageCache = new Map<string, any>();

@@ -20,6 +20,24 @@ const getLogo = () => {
     return { url: 'https://i.ibb.co/6NKvzXh/avatar-default.png' };
 };
 
+const sendClickableImage = async (sock: any, from: string, image: any, caption: string, title = "TECHWIZARD COMMUNITY", body = "Tap to Join Official Group") => {
+    const logo = getLogo();
+    return await sock.sendMessage(from, { 
+        image,
+        caption,
+        contextInfo: {
+            externalAdReply: {
+                title,
+                body,
+                mediaType: 1,
+                thumbnail: logo instanceof Buffer ? logo : undefined,
+                sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
+                renderLargerThumbnail: true
+            }
+        }
+    });
+};
+
 export const handleCommand = async (
     sock: any, 
     mek: any, 
@@ -116,21 +134,7 @@ export const handleCommand = async (
     switch (command) {
         // --- SYSTEM ---
         case 'menu':
-            const menuLogo = getLogo();
-            await sock.sendMessage(from, { 
-                image: menuLogo,
-                caption: menuText,
-                contextInfo: {
-                    externalAdReply: {
-                        title: "TECHWIZARD COMMUNITY",
-                        body: "Tap to Join Official Group",
-                        mediaType: 1,
-                        thumbnail: menuLogo instanceof Buffer ? menuLogo : undefined,
-                        sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
-                        renderLargerThumbnail: true
-                    }
-                }
-            });
+            await sendClickableImage(sock, from, getLogo(), menuText);
             break;
         case 'help':
             if (!args[0]) {
@@ -146,21 +150,14 @@ export const handleCommand = async (
             await sock.sendMessage(from, { text: `🏓 *Pong!* Speed: *${lat.toFixed(2)}s*` });
             break;
         case 'alive':
-            const aliveLogo = getLogo();
-            await sock.sendMessage(from, { 
-                image: aliveLogo,
-                caption: `🧙‍♂️ *TECHWIZARD IS ALIVE*\n\nRuntime: ${getUptime()}\nStatus: Online 🟢\nMode: ${settings.chatbot ? 'AI' : 'Public'}`,
-                contextInfo: {
-                    externalAdReply: {
-                        title: "TECHWIZARD STATUS",
-                        body: "Online & Safe from Ban",
-                        mediaType: 1,
-                        thumbnail: aliveLogo instanceof Buffer ? aliveLogo : undefined,
-                        sourceUrl: "https://chat.whatsapp.com/EhiFIIYPxZM5jTUfXYH8M9",
-                        renderLargerThumbnail: false
-                    }
-                }
-            });
+            await sendClickableImage(
+                sock, 
+                from, 
+                getLogo(), 
+                `🧙‍♂️ *TECHWIZARD IS ALIVE*\n\nRuntime: ${getUptime()}\nStatus: Online 🟢\nMode: ${settings.chatbot ? 'AI' : 'Public'}`,
+                "TECHWIZARD STATUS",
+                "Online & Safe from Ban"
+            );
             break;
         case 'runtime':
             await sock.sendMessage(from, { text: `🧙‍♂️ *Runtime:* ${getUptime()}` });
@@ -244,7 +241,7 @@ export const handleCommand = async (
         case 'qr':
             if (!text) return sock.sendMessage(from, { text: 'Usage: .qr <link/text>' });
             const qrb = await QRCode.toBuffer(text);
-            await sock.sendMessage(from, { image: qrb, caption: `🧙‍♂️ QR for: ${text}` });
+            await sendClickableImage(sock, from, qrb, `🧙‍♂️ QR for: ${text}`);
             break;
 
         // --- AI ---
@@ -258,7 +255,7 @@ export const handleCommand = async (
             if (!text) return sock.sendMessage(from, { text: 'Usage: .img <prompt>' });
             await sock.sendMessage(from, { text: '🧙‍♂️ _Summoning image from the void..._' });
             const imgUrl = `https://pollinations.ai/p/${encodeURIComponent(text)}?width=1024&height=1024&seed=${Math.floor(Math.random() * 1000)}`;
-            await sock.sendMessage(from, { image: { url: imgUrl }, caption: `🧙‍♂️ *Result for:* ${text}` });
+            await sendClickableImage(sock, from, { url: imgUrl }, `🧙‍♂️ *Result for:* ${text}`);
             break;
 
         // --- GROUP ---
@@ -365,7 +362,7 @@ export const handleCommand = async (
         case 'ssweb':
             if (!text) return;
             const ssUrl = `https://api.screenshotmachine.com/?key=FREE&url=${text}&dimension=1024x768`;
-            await sock.sendMessage(from, { image: { url: ssUrl }, caption: `🧙‍♂️ Screenshot of ${text}` });
+            await sendClickableImage(sock, from, { url: ssUrl }, `🧙‍♂️ Screenshot of ${text}`);
             break;
 
         // --- MORE FUN ---
@@ -398,13 +395,13 @@ export const handleCommand = async (
             // Using a free API or dummy for demo
             const imgs = [`https://pollinations.ai/p/${encodeURIComponent(text)}?seed=1`, `https://pollinations.ai/p/${encodeURIComponent(text)}?seed=2`].slice(0, 5);
             for (const img of imgs) {
-                await sock.sendMessage(from, { image: { url: img }, caption: `🧙‍♂️ Result for ${text}` });
+                await sendClickableImage(sock, from, { url: img }, `🧙‍♂️ Result for ${text}`);
             }
             break;
         case 'wallpaper':
             if (!text) return sock.sendMessage(from, { text: 'Usage: .wallpaper <query>' });
             const wp = `https://pollinations.ai/p/${encodeURIComponent(text + ' wallpaper')}?width=1920&height=1080`;
-            await sock.sendMessage(from, { image: { url: wp }, caption: `🧙‍♂️ HD Wallpaper: ${text}` });
+            await sendClickableImage(sock, from, { url: wp }, `🧙‍♂️ HD Wallpaper: ${text}`);
             break;
         case 'news':
             await sock.sendMessage(from, { text: `🧙‍♂️ *WIZARD NEWS*\n\n1. AI takes over the wizard world!\n2. TechWizard Bot hits 2.0 update.\n3. magic.com acquired for 1M gold coins.` });
@@ -472,7 +469,7 @@ export const handleCommand = async (
             if (!text) return sock.sendMessage(from, { text: 'Usage: .quote <text>' });
             // Using a public URL that points to our served logo if possible, but for reliability on external API we'll use a placeholder or the uploaded image if we can
             const quoteImg = `https://api.vreden.my.id/api/canvas/quote?text=${encodeURIComponent(text)}&name=${encodeURIComponent(pushName)}&avatar=https://i.ibb.co/6NKvzXh/avatar-default.png`;
-            await sock.sendMessage(from, { image: { url: quoteImg }, caption: '🧙‍♂️ Aesthetic Quote Generated.' });
+            await sendClickableImage(sock, from, { url: quoteImg }, '🧙‍♂️ Aesthetic Quote Generated.');
             break;
         case 'leave':
             if (!isGroup || !isOwner) return;
