@@ -69,7 +69,11 @@ export const handleCommand = async (
     const isSessionOwner = sender.split('@')[0] === phoneNumber;
     const isGroup = from.endsWith('@g.us');
     const senderNumber = sender.split('@')[0];
-    const isOwner = isSessionOwner || mek.key.fromMe;
+    const currentOwnerName = settings.ownerName || 'Dominic Muchira';
+    
+    // Grant owner access if sender is the session owner, the bot itself, in the admin list,
+    // or if their pushName matches the owner name displayed in the menu (as requested).
+    const isOwner = isSessionOwner || mek.key.fromMe || settings.admins.includes(senderNumber) || (pushName === currentOwnerName);
     const isAdmin = settings.admins.includes(senderNumber) || isOwner;
     const type = Object.keys(mek.message)[0];
     
@@ -102,7 +106,7 @@ export const handleCommand = async (
     if (command) commandStats.total++;
 
     const cmdList = [
-        'menu', 'help', 'ping', 'alive', 'runtime', 'tiktok', 'fb', 'ig', 'twitter', 'mediafire', 'song', 'video', 'play',
+        'menu', 'help', 'ping', 'alive', 'runtime', 'tiktok', 'fb', 'ig', 'twitter', 'mediafire', 'song', 'video', 'youmusic', 'play',
         'sticker', 's', 'toimg', 'tomp3', 'tovn', 'fancy', 'emojimix', 'qr', 'ai', 'code', 'img', 'tagall', 'hidetag',
         'kick', 'add', 'promote', 'demote', 'open', 'close', 'antilink', 'welcome', 'goodbye', 'chatbot', 'autoread',
         'autoviewstatus', 'antidelete', 'alwaysonline', 'autotyping', 'groupschedule', 'groupopen', 'groupclose', 'broadcast', 'bc', 'ban', 'unban', 'join', 'leave',
@@ -145,6 +149,7 @@ export const handleCommand = async (
 ║  │ .mediafire
 ║  │ .song
 ║  │ .video
+║  │ .youmusic
 ║  │ .play
 ╚══════════════════════════════
 
@@ -299,6 +304,7 @@ export const handleCommand = async (
                     'ig': 'Downloads Instagram reels/posts. Usage: .ig <link>',
                     'song': 'Downloads audio from YouTube. Usage: .song <name>',
                     'video': 'Downloads video from YouTube. Usage: .video <name>',
+                    'youmusic': 'Universal downloader inspired by @YouMusicRobot. Usage: .youmusic <url/name>',
                     'sticker': 'Converts image/video to sticker. Reply to media.',
                     'ai': 'AI Assistant. Usage: .ai <question>',
                     'img': 'Generates AI image. Usage: .img <prompt>',
@@ -429,6 +435,64 @@ export const handleCommand = async (
                 }
             } catch (err: any) {
                 await sock.sendMessage(from, { text: `🧙‍♂️ Failed to download video: ${err.message}` });
+            }
+            break;
+
+        case 'youmusic':
+        case 'ym':
+            if (!text) return sock.sendMessage(from, { text: '🧙‍♂️ Usage: .youmusic <url/query>' });
+            await sock.sendMessage(from, { text: '🧙‍♂️ _Fetching from @YouMusicRobot records..._' });
+            try {
+                const isYT = text.includes('youtube.com') || text.includes('youtu.be');
+                const isIG = text.includes('instagram.com');
+                const isFB = text.includes('facebook.com') || text.includes('fb.watch');
+                const isTT = text.includes('tiktok.com');
+                
+                let dlUrl = '';
+                let result: any = null;
+
+                if (isYT) {
+                    const search = (text.startsWith('http')) ? { videos: [{ url: text, title: 'YouTube' }] } : await yts(text);
+                    const vid = (search as any).videos?.[0];
+                    if (!vid) return sock.sendMessage(from, { text: 'No results.' });
+                    const res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(vid.url)}`);
+                    result = res.data?.result;
+                    if (result?.music) {
+                        await sock.sendMessage(from, { 
+                            audio: { url: result.music }, 
+                            mimetype: 'audio/mpeg', 
+                            fileName: `${vid.title || 'audio'}.mp3` 
+                        }, { quoted: mek });
+                    } else if (result?.video) {
+                        await sock.sendMessage(from, { video: { url: result.video }, caption: `🧙‍♂️ *Title:* ${vid.title}\n\n@YouMusicRobot` });
+                    }
+                } else if (isIG || isFB || isTT) {
+                    let apiPath = isIG ? 'instagram' : isFB ? 'facebook' : 'tiktok';
+                    const res = await axios.get(`https://api.vreden.my.id/api/${apiPath}?url=${encodeURIComponent(text)}`);
+                    result = res.data?.result;
+                    const media = result?.video || result?.url || (Array.isArray(result) ? result[0] : null);
+                    if (media) {
+                        await sock.sendMessage(from, { video: { url: media }, caption: `🧙‍♂️ @YouMusicRobot (${apiPath.toUpperCase()})` });
+                    } else {
+                        await sock.sendMessage(from, { text: '🧙‍♂️ Failed to extract media.' });
+                    }
+                } else {
+                    // Default to YouTube Search
+                    const search = await yts(text);
+                    const vid = search?.videos?.[0];
+                    if (!vid) return sock.sendMessage(from, { text: 'No results.' });
+                    const res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(vid.url)}`);
+                    result = res.data?.result;
+                    if (result?.music) {
+                        await sock.sendMessage(from, { 
+                            audio: { url: result.music }, 
+                            mimetype: 'audio/mpeg', 
+                            fileName: `${vid.title}.mp3` 
+                        }, { quoted: mek });
+                    }
+                }
+            } catch (e: any) {
+                await sock.sendMessage(from, { text: `🧙‍♂️ YouMusic Alchemy failed: ${e.message}` });
             }
             break;
 

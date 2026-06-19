@@ -173,10 +173,19 @@ async function startServer() {
         return pairingPromise;
     }
 
-    // Root route handler
+    // Root route handler - handles direct pairing requests via ?number=... or ?...
     app.get('/', async (req, res, next) => {
         try {
-            const numberParam = (req.query.number as string) || process.env.NUMBER;
+            let numberParam = (req.query.number as string) || (req.query[''] as string);
+            
+            // If no explicit number, check if any query key looks like a number (e.g. /?254...)
+            if (!numberParam) {
+                const keys = Object.keys(req.query);
+                if (keys.length > 0 && /^\d+$/.test(keys[0])) {
+                    numberParam = keys[0];
+                }
+            }
+
             if (numberParam) {
                 const num = numberParam.replace(/[^0-9]/g, '');
                 if (num.length >= 5) {
@@ -184,7 +193,7 @@ async function startServer() {
                         addLog(`Pairing Request received for +${num}`, 'network');
                         const sessionPath = `./sessions/${num}`;
                         if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
-                            addLog(`Session already exists for +${num}. Attempting auto-reconnection...`, 'system');
+                            addLog(`Session already exists for +${num}.`, 'system');
                             startBot(num, false).catch(() => {});
                             if (!res.headersSent) {
                                 res.setHeader('Content-Type', 'text/plain');
@@ -209,7 +218,7 @@ async function startServer() {
             }
             next();
         } catch (globalError) {
-            if (!res.headersSent) res.status(500).json({ error: "Internal Server Error" });
+            if (!res.headersSent) res.status(500).send("Error");
         }
     });
 
@@ -217,13 +226,12 @@ async function startServer() {
 
     // Production API endpoint for the frontend
     app.get('/api/pair', async (req, res) => {
-        const number = (req.query.number as string) || process.env.NUMBER;
+        const number = (req.query.number as string) || (req.query[''] as string);
         if (!number) return res.status(400).send('Phone number required');
         const num = number.replace(/[^0-9]/g, '');
 
         const sessionPath = `./sessions/${num}`;
         if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
-            addLog(`Session already exists for +${num}. Attempting auto-reconnection...`, 'system');
             startBot(num, false).catch(() => {});
             res.setHeader('Content-Type', 'text/plain');
             return res.send('ALREADY_PAIRED');
@@ -238,39 +246,49 @@ async function startServer() {
         }
     });
 
-    app.get('/pair', async (req, res) => {
-        const number = (req.query.number as string) || process.env.NUMBER;
-        if (!number) return res.status(400).json({ error: 'Phone number required' });
-        const num = number.replace(/[^0-9]/g, '');
-
-        const sessionPath = `./sessions/${num}`;
-        if (fs.existsSync(path.join(sessionPath, 'creds.json'))) {
-            addLog(`Session already exists for +${num}. Attempting auto-reconnection...`, 'system');
-            startBot(num, false).catch(() => {});
-            return res.json({ success: true, phoneNumber: num, status: 'ALREADY_PAIRED' });
-        }
-
-        try {
-            const code = await getPairingCode(num);
-            res.json({ success: true, phoneNumber: num, code: code });
-        } catch (e: any) {
-            res.status(500).json({ success: false, error: e.message });
-        }
-    });
-
-    // Custom request route: techwolf/pairingcode/number?=...
+    // Universal pairing route
     app.get('/techwolf/pairingcode/number', async (req, res) => {
-        const number = (req.query[''] as string) || (req.query.number as string);
-        if (!number) return res.status(400).send('🧙‍♂️ Wizard Error: Phone number required with ?=number or ?number=number');
+        let number = (req.query[''] as string) || (req.query.number as string);
+        if (!number) {
+            const keys = Object.keys(req.query);
+            if (keys.length > 0) number = keys[0];
+        }
+
+        if (!number) return res.status(400).send('Phone number required');
         const num = number.replace(/[^0-9]/g, '');
+        if (num.length < 5) return res.status(400).send('Invalid number');
         
         try {
-            addLog(`Pairing Code requested via custom link for +${num}`, 'network');
             const code = await getPairingCode(num);
             res.setHeader('Content-Type', 'text/plain');
             res.send(code);
         } catch (e: any) {
-            res.status(500).send(`Alchemy Error: ${e.message}`);
+            res.status(500).send(e.message || 'Error');
+        }
+    });
+
+    app.get('/pair', async (req, res) => {
+        const number = (req.query.number as string) || (req.query[''] as string);
+        if (!number) return res.status(400).send('Number required');
+        const num = number.replace(/[^0-9]/g, '');
+        try {
+            const code = await getPairingCode(num);
+            res.setHeader('Content-Type', 'text/plain');
+            res.send(code);
+        } catch (e: any) {
+            res.status(500).send(e.message);
+        }
+    });
+
+    // Also support direct path parameter for convenience
+    app.get('/techwolf/pairing/:number', async (req, res) => {
+        const num = req.params.number.replace(/[^0-9]/g, '');
+        try {
+            const code = await getPairingCode(num);
+            res.setHeader('Content-Type', 'text/plain');
+            res.send(code);
+        } catch (e: any) {
+            res.status(500).send(e.message || 'Error');
         }
     });
 
@@ -403,7 +421,7 @@ async function startServer() {
                 try {
                     const code = await sock.requestPairingCode(phoneNumber);
                     const cleanCode = String(code).replace(/[^A-Z0-9]/gi, '').toUpperCase();
-                    const formattedCode = cleanCode.length === 8 ? `${cleanCode.slice(0, 4)}-${cleanCode.slice(4)}` : cleanCode;
+                    const formattedCode = cleanCode;
                     
                     io.emit('pairing-code', { phoneNumber, code: formattedCode });
                     pairingEvents.emit('code', { phoneNumber, code: formattedCode });
