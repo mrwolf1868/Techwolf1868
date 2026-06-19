@@ -7,11 +7,12 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "build": "tsc",
+    "build": "vite build && tsc --noEmit",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^1.50.1",
+    "@google/genai": "^1.52.0",
+    "@google/generative-ai": "^0.24.1",
     "@hapi/boom": "^10.0.1",
     "@tailwindcss/vite": "^4.2.4",
     "@types/cors": "^2.8.19",

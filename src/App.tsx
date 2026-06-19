@@ -36,14 +36,32 @@ export default function App() {
   const [stats, setStats] = useState({ uptime: 0, status: 'Active', latency: 0 });
   const [activeTab, setActiveTab] = useState('terminal');
   const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState(() => localStorage.getItem('techwizard_phoneNumber') || '');
   const [isPairing, setIsPairing] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [sessions, setSessions] = useState<{ phoneNumber: string, connected: boolean }[]>([]);
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
+    localStorage.setItem('techwizard_phoneNumber', phoneNumber);
+  }, [phoneNumber]);
+
+  useEffect(() => {
     const newSocket = io();
     setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      setIsConnected(true);
+      fetch('/api/logs')
+        .then(r => r.json())
+        .then(setLogs)
+        .catch(() => {}); // Silent catch for transient errors
+    });
+
+    newSocket.on('disconnect', () => {
+      setIsConnected(false);
+    });
 
     newSocket.on('log', (msg: string) => {
       setLogs(prev => [...prev.slice(-100), msg]);
@@ -59,10 +77,32 @@ export default function App() {
       setIsPairing(false);
     });
 
-    fetch('/api/logs').then(r => r.json()).then(setLogs);
+    fetch('/api/logs')
+      .then(r => r.json())
+      .then(data => {
+        setLogs(data);
+        setIsConnected(newSocket.connected);
+      })
+      .catch(() => {});
+
+    // Polling active sessions status
+    const fetchStatus = () => {
+      fetch('/api/status')
+        .then(r => r.json())
+        .then(data => {
+          if (data && data.sessions) {
+            setSessions(data.sessions);
+          }
+        })
+        .catch(() => {});
+    };
+
+    fetchStatus();
+    const intervalId = setInterval(fetchStatus, 4000);
 
     return () => {
       newSocket.disconnect();
+      clearInterval(intervalId);
     };
   }, []);
 
@@ -78,8 +118,11 @@ export default function App() {
       const resp = await fetch(`/api/pair?number=${phoneNumber.replace(/[^0-9]/g, '')}`);
       if (resp.ok) {
         const code = await resp.text();
-        // Ensure it looks like a pairing code
-        if (code && code.length >= 8 && !code.includes(' ')) {
+        if (code === 'ALREADY_PAIRED') {
+          // Sweet, already active!
+          alert(`✨ Magic Reactivation: Credentials already exist for +${phoneNumber}! The bot is waking up and connecting in the background. Check logs.`);
+          setIsPairing(false);
+        } else if (code && code.length >= 8 && !code.includes(' ')) {
           setPairingCode(code);
         } else {
           console.error('Invalid code received:', code);
@@ -95,6 +138,36 @@ export default function App() {
       alert('Network error. Check connection.');
     } finally {
       setIsPairing(false);
+    }
+  };
+
+  const handleDisconnect = async (targetPhone: string) => {
+    if (!window.confirm(`Are you sure you want to disconnect +${targetPhone} and delete their wizard session?`)) {
+      return;
+    }
+    try {
+      const resp = await fetch('/api/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phoneNumber: targetPhone })
+      });
+      if (resp.ok) {
+        fetch('/api/status')
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.sessions) {
+              setSessions(data.sessions);
+            }
+          })
+          .catch(() => {});
+        alert(`🔮 Successfully disconnected and removed session +${targetPhone}`);
+      } else {
+        const data = await resp.json();
+        alert(`Error disconnecting: ${data.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Network error while requesting disconnection.');
     }
   };
 
@@ -217,9 +290,9 @@ export default function App() {
             <div className="lg:hidden w-8 h-8 rounded-lg bg-violet-600 flex items-center justify-center shadow-lg">
               <Wand2 className="text-white w-5 h-5 shadow-inner" />
             </div>
-            <div className="flex items-center gap-2 px-2.5 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-[10px] font-bold text-green-500 uppercase tracking-wider">LIVE</span>
+            <div className={`flex items-center gap-2 px-2.5 py-1 ${isConnected ? 'bg-green-500/10 border-green-500/20 text-green-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'} border rounded-full`}>
+              <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-rose-500'}`} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">{isConnected ? 'LIVE' : 'OFFLINE'}</span>
             </div>
             <div className="hidden sm:flex items-center gap-2 text-slate-500 text-[10px] font-bold uppercase tracking-widest">
               <Activity className="w-3.5 h-3.5" />
@@ -283,6 +356,64 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+
+                    {sessions.length > 0 && (
+                      <div className="mt-6 pt-6 border-t border-white/5 w-full">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Active Wizards:</span>
+                            <span id="active-bots-counter" className="px-2 py-0.5 rounded-md bg-violet-600/25 border border-violet-500/30 text-violet-400 font-mono text-[10px] font-bold">
+                              {sessions.filter(s => s.connected).length} / {sessions.length} Online
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                            <span>Raw Data Link:</span>
+                            <a 
+                              id="api-status-link"
+                              href="/api/status" 
+                              target="_blank" 
+                              rel="noreferrer" 
+                              className="text-violet-400 font-mono hover:underline font-bold"
+                            >
+                              /api/status
+                            </a>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {sessions.map(s => (
+                            <div 
+                              id={`session-card-${s.phoneNumber}`}
+                              key={s.phoneNumber} 
+                              className={`flex items-center justify-between p-3.5 rounded-2xl border transition-all ${
+                                s.connected 
+                                  ? 'bg-emerald-500/[0.03] border-emerald-500/10 hover:border-emerald-500/20' 
+                                  : 'bg-amber-500/[0.03] border-amber-500/10 hover:border-amber-500/20'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <span className={`w-2 h-2 rounded-full ${s.connected ? 'bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-amber-500'}`} />
+                                <div className="flex flex-col">
+                                  <span className="text-[11px] font-mono font-bold text-slate-200">+{s.phoneNumber}</span>
+                                  <span className={`text-[9px] uppercase font-black tracking-widest ${s.connected ? 'text-green-400 font-extrabold' : 'text-amber-400'}`}>
+                                    {s.connected ? 'Active Connection' : 'Credentials Loaded'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <button
+                                id={`btn-disconnect-${s.phoneNumber}`}
+                                onClick={() => handleDisconnect(s.phoneNumber)}
+                                title="Disconnect and delete session"
+                                className="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/20 hover:border-rose-500 transition-all duration-200 active:scale-95 flex items-center justify-center cursor-pointer"
+                              >
+                                <LogOut className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
