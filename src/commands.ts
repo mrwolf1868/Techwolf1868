@@ -79,6 +79,11 @@ export const handleCommand = async (
     
     const ownerOnlyMsg = "🧙‍♂️ *Access Denied!*\n\nThis feature is restricted to the wizard who deployed this botanical instance.\n\n_Deploy your own bot session at TechWizard Portal to gain full access!_";
 
+    // --- AUTO-CONTROLS ---
+    if (settings.alwaysonline && !mek.key.fromMe) {
+        try { await sock.sendPresenceUpdate('available'); } catch (e) {}
+    }
+    
     // AFK Check for sender
     if (afkUsers.has(sender)) {
         afkUsers.delete(sender);
@@ -112,7 +117,7 @@ export const handleCommand = async (
         'autoviewstatus', 'antidelete', 'alwaysonline', 'autotyping', 'groupschedule', 'groupopen', 'groupclose', 'broadcast', 'bc', 'ban', 'unban', 'join', 'leave',
         'setprefix', 'addadmin', 'removeadmin', 'shutdown', 'iplookup', 'whois', 'ssweb', 'tiny', 'fliptext', 'truth',
         'dare', 'autosticker', 'image', 'imgsearch', 'wallpaper', 'news', 'take', 'apkinfo', 'savevcf', 'pdf', 'zip',
-        'unzip', 'stats', 'quote'
+        'unzip', 'stats', 'quote', 'translate', 'tr', 'setbotname', 'setownername', 'setbotpp', 'owner', 'sc', 'script', 'block', 'unblock', 'reboot'
     ];
 
     const menuText = `╔══════════════════════════════╗
@@ -441,46 +446,51 @@ export const handleCommand = async (
         case 'youmusic':
         case 'ym':
             if (!text) return sock.sendMessage(from, { text: '🧙‍♂️ Usage: .youmusic <url/query>' });
-            await sock.sendMessage(from, { text: '🧙‍♂️ _Fetching from @YouMusicRobot records..._' });
+            await sock.sendMessage(from, { text: '🧙‍♂️ _Fetching media from @YouMusicRobot records..._' });
             try {
-                const isYT = text.includes('youtube.com') || text.includes('youtu.be');
-                const isIG = text.includes('instagram.com');
-                const isFB = text.includes('facebook.com') || text.includes('fb.watch');
-                const isTT = text.includes('tiktok.com');
+                const url = text.trim();
+                const isYT = /youtube\.com|youtu\.be/i.test(url);
+                const isIG = /instagram\.com/i.test(url);
+                const isFB = /facebook\.com|fb\.watch/i.test(url);
+                const isTT = /tiktok\.com/i.test(url);
+                const isSC = /soundcloud\.com/i.test(url);
                 
-                let dlUrl = '';
                 let result: any = null;
 
                 if (isYT) {
-                    const search = (text.startsWith('http')) ? { videos: [{ url: text, title: 'YouTube' }] } : await yts(text);
-                    const vid = (search as any).videos?.[0];
-                    if (!vid) return sock.sendMessage(from, { text: 'No results.' });
+                    const search = (url.startsWith('http')) ? { videos: [{ url: url, title: 'YouTube Media' }] } : await yts(text);
+                    const vid = search.videos?.[0];
+                    if (!vid) return sock.sendMessage(from, { text: 'No video found.' });
                     const res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(vid.url)}`);
                     result = res.data?.result;
                     if (result?.music) {
                         await sock.sendMessage(from, { 
                             audio: { url: result.music }, 
                             mimetype: 'audio/mpeg', 
-                            fileName: `${vid.title || 'audio'}.mp3` 
+                            fileName: `${vid.title}.mp3` 
                         }, { quoted: mek });
                     } else if (result?.video) {
                         await sock.sendMessage(from, { video: { url: result.video }, caption: `🧙‍♂️ *Title:* ${vid.title}\n\n@YouMusicRobot` });
                     }
-                } else if (isIG || isFB || isTT) {
-                    let apiPath = isIG ? 'instagram' : isFB ? 'facebook' : 'tiktok';
-                    const res = await axios.get(`https://api.vreden.my.id/api/${apiPath}?url=${encodeURIComponent(text)}`);
+                } else if (isIG || isFB || isTT || isSC) {
+                    let apiPath = isIG ? 'instagram' : isFB ? 'facebook' : isTT ? 'tiktok' : 'soundcloud';
+                    const res = await axios.get(`https://api.vreden.my.id/api/${apiPath}?url=${encodeURIComponent(url)}`);
                     result = res.data?.result;
                     const media = result?.video || result?.url || (Array.isArray(result) ? result[0] : null);
                     if (media) {
-                        await sock.sendMessage(from, { video: { url: media }, caption: `🧙‍♂️ @YouMusicRobot (${apiPath.toUpperCase()})` });
+                        if (isSC) {
+                            await sock.sendMessage(from, { audio: { url: media }, mimetype: 'audio/mpeg', fileName: 'soundcloud.mp3' }, { quoted: mek });
+                        } else {
+                            await sock.sendMessage(from, { video: { url: media }, caption: `🧙‍♂️ @YouMusicRobot (${apiPath.toUpperCase()})` });
+                        }
                     } else {
-                        await sock.sendMessage(from, { text: '🧙‍♂️ Failed to extract media.' });
+                        await sock.sendMessage(from, { text: '🧙‍♂️ Alchemy failed to extract media from this link.' });
                     }
                 } else {
-                    // Default to YouTube Search
+                    // Default to Search & Song
                     const search = await yts(text);
                     const vid = search?.videos?.[0];
-                    if (!vid) return sock.sendMessage(from, { text: 'No results.' });
+                    if (!vid) return sock.sendMessage(from, { text: 'Not found.' });
                     const res = await axios.get(`https://api.vreden.my.id/api/ytplay?query=${encodeURIComponent(vid.url)}`);
                     result = res.data?.result;
                     if (result?.music) {
@@ -973,9 +983,79 @@ export const handleCommand = async (
             }
             break;
         case 'pdf':
+            if (!text) return sock.sendMessage(from, { text: 'Usage: .pdf <text to convert>' });
+            await sock.sendMessage(from, { text: '🧙‍♂️ _Synthesizing text into a PDF scroll..._ '});
+            try {
+                const pdfRes = await axios.get(`https://api.vreden.my.id/api/tools/pdf?text=${encodeURIComponent(text)}`);
+                if (pdfRes.data?.result) {
+                    await sock.sendMessage(from, { document: { url: pdfRes.data.result }, fileName: 'WizardScroll.pdf', mimetype: 'application/pdf' });
+                } else {
+                    throw new Error('Alchemy failed');
+                }
+            } catch {
+                await sock.sendMessage(from, { text: '🧙‍♂️ PDF lab is currently undergoing maintenance.' });
+            }
+            break;
+        case 'translate':
+        case 'tr':
+            if (!text) return sock.sendMessage(from, { text: 'Usage: .tr <lang> <text>' });
+            const trLang = args[0];
+            const trText = args.slice(1).join(' ');
+            if (!trLang || !trText) return sock.sendMessage(from, { text: 'Usage: .tr <lang> <text>' });
+            await sock.sendMessage(from, { text: '🧙‍♂️ _Translating..._' });
+            const trResult = await translate(trText, trLang);
+            await sock.sendMessage(from, { text: `🧙‍♂️ *TRANSLATION:* ${trResult}` });
+            break;
+        case 'setbotname':
+            if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
+            if (!text) return sock.sendMessage(from, { text: 'Usage: .setbotname <name>' });
+            settings.botName = text;
+            saveSettings();
+            await sock.sendMessage(from, { text: `🧙‍♂️ Bot Name set to: *${settings.botName}*` });
+            break;
+        case 'setownername':
+            if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
+            if (!text) return sock.sendMessage(from, { text: 'Usage: .setownername <name>' });
+            settings.ownerName = text;
+            saveSettings();
+            await sock.sendMessage(from, { text: `🧙‍♂️ Owner Name set to: *${settings.ownerName}*` });
+            break;
+        case 'setbotpp':
+            if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
+            const qPP = mek.message.extendedTextMessage?.contextInfo?.quotedMessage;
+            if (!qPP?.imageMessage) return sock.sendMessage(from, { text: 'Reply to an image!' });
+            await sock.sendMessage(from, { text: '🧙‍♂️ _Updating magical avatar..._' });
+            try {
+                const ppBuff = await getMediaBuffer(mek);
+                await sock.updateProfilePicture(sock.user.id, ppBuff);
+                await sock.sendMessage(from, { text: '🧙‍♂️ Profile picture updated successfully!' });
+            } catch (e: any) {
+                await sock.sendMessage(from, { text: `🧙‍♂️ Avatar update failed: ${e.message}` });
+            }
+            break;
+        case 'owner':
+            await sock.sendMessage(from, { text: `🧙‍♂️ *TECHWIZARD OWNER:* @${phoneNumber.split('@')[0]}\n\nName: ${settings.ownerName || 'The Archwizard'}`, mentions: [`${phoneNumber}@s.whatsapp.net`] });
+            break;
+        case 'sc':
+        case 'script':
+            await sock.sendMessage(from, { text: `🧙‍♂️ *TECHWIZARD SCRIPT*\n\nRepo: https://github.com/TechWizardHub/TechWizard-Bot\nDeploy: http://Techwizardhub.kesug.com\n\n_Star the repo to support!_` });
+            break;
+        case 'block':
+        case 'unblock':
+            if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
+            const targetBlock = mek.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || args[0] + '@s.whatsapp.net';
+            if (!targetBlock) return sock.sendMessage(from, { text: 'Tag someone!' });
+            await sock.updateBlockStatus(targetBlock, command === 'block' ? 'block' : 'unblock');
+            await sock.sendMessage(from, { text: `🧙‍♂️ User ${command === 'block' ? 'blocked' : 'unblocked'}.` });
+            break;
+        case 'reboot':
+            if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
+            await sock.sendMessage(from, { text: '🧙‍♂️ System rebooting...' });
+            process.exit(0);
+            break;
         case 'zip':
         case 'unzip':
-            await sock.sendMessage(from, { text: `🧙‍♂️ .${command} is currently in the alchemy lab.` });
+            await sock.sendMessage(from, { text: `🧙‍♂️ .${command} functionality is strictly monitored. Contact @TechWizard for access.` });
             break;
         case 'stats':
             if (!isOwner) return sock.sendMessage(from, { text: ownerOnlyMsg });
